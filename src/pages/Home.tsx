@@ -141,20 +141,8 @@ export function Home() {
     <>
       {/* Hero */}
       <section className="relative overflow-hidden pt-24 pb-20 px-6">
-        <div
-          className="absolute inset-0 pointer-events-none"
-          style={{
-            backgroundImage:
-              'linear-gradient(oklch(0.72 0.2 155 / 0.04) 1px, transparent 1px), linear-gradient(90deg, oklch(0.72 0.2 155 / 0.04) 1px, transparent 1px)',
-            backgroundSize: '48px 48px',
-          }}
-        />
-        <div
-          className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[400px] pointer-events-none"
-          style={{
-            background: 'radial-gradient(ellipse at center top, oklch(0.72 0.2 155 / 0.12) 0%, transparent 70%)',
-          }}
-        />
+        <div className="absolute inset-0 pointer-events-none bg-grid" />
+        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[400px] pointer-events-none bg-glow-top" />
 
         <div className="relative max-w-6xl mx-auto text-center">
           <Badge
@@ -257,19 +245,9 @@ export function Home() {
       <section className="py-24 px-6 border-t border-border">
         <div className="max-w-3xl mx-auto text-center">
           <div
-            className="rounded-2xl border border-primary/30 p-12 relative overflow-hidden"
-            style={{
-              background: 'radial-gradient(ellipse at center, oklch(0.72 0.2 155 / 0.08) 0%, transparent 70%)',
-            }}
+            className="rounded-2xl border border-primary/30 p-12 relative overflow-hidden bg-glow-center"
           >
-            <div
-              className="absolute inset-0 pointer-events-none rounded-2xl"
-              style={{
-                backgroundImage:
-                  'linear-gradient(oklch(0.72 0.2 155 / 0.05) 1px, transparent 1px), linear-gradient(90deg, oklch(0.72 0.2 155 / 0.05) 1px, transparent 1px)',
-                backgroundSize: '32px 32px',
-              }}
-            />
+            <div className="absolute inset-0 pointer-events-none rounded-2xl bg-grid-sm" />
             <Badge
               variant="outline"
               className="mb-6 border-primary/40 text-primary bg-primary/10 text-xs uppercase tracking-wide"

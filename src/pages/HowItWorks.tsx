@@ -156,20 +156,8 @@ export function HowItWorks() {
     <>
       {/* Hero */}
       <section className="relative overflow-hidden pt-20 pb-16 px-6 border-b border-border">
-        <div
-          className="absolute inset-0 pointer-events-none"
-          style={{
-            backgroundImage:
-              'linear-gradient(oklch(0.72 0.2 155 / 0.03) 1px, transparent 1px), linear-gradient(90deg, oklch(0.72 0.2 155 / 0.03) 1px, transparent 1px)',
-            backgroundSize: '48px 48px',
-          }}
-        />
-        <div
-          className="absolute top-0 left-1/2 -translate-x-1/2 w-[600px] h-[300px] pointer-events-none"
-          style={{
-            background: 'radial-gradient(ellipse at center top, oklch(0.72 0.2 155 / 0.1) 0%, transparent 70%)',
-          }}
-        />
+        <div className="absolute inset-0 pointer-events-none bg-grid" />
+        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[600px] h-[300px] pointer-events-none bg-glow-top" />
         <div className="relative max-w-3xl mx-auto text-center">
           <Badge
             variant="outline"

@@ -76,22 +76,40 @@
 
 @layer utilities {
   .glow-green {
-    box-shadow: 0 0 20px oklch(0.72 0.2 155 / 0.3), 0 0 40px oklch(0.72 0.2 155 / 0.1);
+    box-shadow: 0 0 20px rgba(0, 210, 130, 0.3), 0 0 40px rgba(0, 210, 130, 0.1);
   }
   .glow-green-text {
-    text-shadow: 0 0 20px oklch(0.72 0.2 155 / 0.6);
+    text-shadow: 0 0 20px rgba(0, 210, 130, 0.6);
   }
   .border-glow {
-    border-color: oklch(0.72 0.2 155 / 0.4);
-    box-shadow: 0 0 0 1px oklch(0.72 0.2 155 / 0.15) inset;
+    border-color: rgba(0, 210, 130, 0.4);
+    box-shadow: 0 0 0 1px rgba(0, 210, 130, 0.15) inset;
   }
   .scan-line {
     background: repeating-linear-gradient(
       0deg,
       transparent,
       transparent 2px,
-      oklch(0.72 0.2 155 / 0.015) 2px,
-      oklch(0.72 0.2 155 / 0.015) 4px
+      rgba(0, 210, 130, 0.015) 2px,
+      rgba(0, 210, 130, 0.015) 4px
     );
+  }
+  .bg-grid {
+    background-image:
+      linear-gradient(rgba(0, 210, 130, 0.04) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0, 210, 130, 0.04) 1px, transparent 1px);
+    background-size: 48px 48px;
+  }
+  .bg-grid-sm {
+    background-image:
+      linear-gradient(rgba(0, 210, 130, 0.05) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0, 210, 130, 0.05) 1px, transparent 1px);
+    background-size: 32px 32px;
+  }
+  .bg-glow-top {
+    background: radial-gradient(ellipse at center top, rgba(0, 210, 130, 0.12) 0%, transparent 70%);
+  }
+  .bg-glow-center {
+    background: radial-gradient(ellipse at center, rgba(0, 210, 130, 0.08) 0%, transparent 70%);
   }
 }
