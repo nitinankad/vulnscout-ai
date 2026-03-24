@@ -1,4 +1,4 @@
-import { Link, useLocation } from 'react-router-dom'
+import { Link, useLocation, Outlet } from 'react-router-dom'
 import { Button } from '@/components/ui/button'
 
 const NAV_LINKS = [
@@ -8,7 +8,7 @@ const NAV_LINKS = [
   { label: 'Docs', href: '#' },
 ]
 
-export function Layout({ children }: { children: React.ReactNode }) {
+export function Layout() {
   const { pathname } = useLocation()
 
   return (
@@ -49,20 +49,24 @@ export function Layout({ children }: { children: React.ReactNode }) {
           </nav>
 
           <div className="flex items-center gap-3">
-            <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-foreground">
-              Sign in
-            </Button>
-            <Button
-              size="sm"
-              className="bg-primary text-primary-foreground hover:bg-primary/90 glow-green font-medium"
-            >
-              Get started free
-            </Button>
+            <Link to="/login">
+              <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-foreground">
+                Sign in
+              </Button>
+            </Link>
+            <Link to="/login">
+              <Button
+                size="sm"
+                className="bg-primary text-primary-foreground hover:bg-primary/90 glow-green font-medium"
+              >
+                Get started free
+              </Button>
+            </Link>
           </div>
         </div>
       </header>
 
-      <main className="flex-1">{children}</main>
+      <main className="flex-1"><Outlet /></main>
 
       {/* Footer */}
       <footer className="border-t border-border py-10 px-6">
