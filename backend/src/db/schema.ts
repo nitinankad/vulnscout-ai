@@ -21,6 +21,7 @@ export const users = pgTable('users', {
   email: text('email').unique().notNull(),
   passwordHash: text('password_hash').notNull(),
   name: text('name').notNull(),
+  githubTokenEncrypted: text('github_token_encrypted'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 

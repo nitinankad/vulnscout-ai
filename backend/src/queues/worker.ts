@@ -1,31 +1,59 @@
 import { Worker, type Job } from 'bullmq';
 import { eq } from 'drizzle-orm';
 import { db } from '../db';
-import { scans } from '../db/schema';
+import { scans, services, users } from '../db/schema';
 import { bullMQConnection } from './redis';
+import { emitEvent } from '../lib/events';
+import { decrypt } from '../lib/crypto';
+import { ingestRepo } from '../services/ingest';
 import type { ScanJobData } from './index';
 
 export function startWorker() {
   const worker = new Worker<ScanJobData>(
     'scans',
     async (job: Job<ScanJobData>) => {
-      const { scanId, attackProfile } = job.data;
-      console.log(`[worker] scan ${scanId} picked up · profile: ${attackProfile}`);
+      const { scanId, serviceId, userId, attackProfile } = job.data;
+      const startedAt = Date.now();
+
+      console.log(`[worker] scan ${scanId} started · profile: ${attackProfile}`);
+      await emitEvent(scanId, 'info', `Scan started · profile: ${attackProfile}`);
 
       // Mark as running
       await db.update(scans).set({ status: 'running' }).where(eq(scans.id, scanId));
-      console.log(`[worker] scan ${scanId} status → running`);
 
-      // Phases 2–5 will be added here (ingest, sandbox, AI agent, report)
-      // For now, simulate completion after a short delay
-      await new Promise((resolve) => setTimeout(resolve, 2000));
+      // Load service + user records
+      const [service] = await db.select().from(services).where(eq(services.id, serviceId)).limit(1);
+      if (!service) throw new Error(`Service ${serviceId} not found`);
 
+      const [user] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+      if (!user) throw new Error(`User ${userId} not found`);
+
+      // Decrypt GitHub token if present
+      const githubToken = user.githubTokenEncrypted
+        ? decrypt(user.githubTokenEncrypted)
+        : null;
+
+      // ── Phase 1: Ingest & Build ──────────────────────────────────────────────
+      await emitEvent(scanId, 'info', 'Phase 1 — Ingest & Build');
+      const ingestResult = await ingestRepo({
+        repoUrl: service.source,
+        branch: service.branch,
+        githubToken,
+        scanId,
+      });
+
+      await emitEvent(scanId, 'success', `Image ready: ${ingestResult.imageTag}`);
+
+      // ── Phases 2–4 will go here (sandbox, AI agent, report) ─────────────────
+
+      const durationMs = Date.now() - startedAt;
       await db
         .update(scans)
-        .set({ status: 'completed', completedAt: new Date(), durationMs: 2000 })
+        .set({ status: 'completed', completedAt: new Date(), durationMs })
         .where(eq(scans.id, scanId));
 
-      console.log(`[worker] scan ${scanId} status → completed`);
+      await emitEvent(scanId, 'success', `Scan complete · ${Math.round(durationMs / 1000)}s`);
+      console.log(`[worker] scan ${scanId} completed in ${durationMs}ms`);
     },
     { connection: bullMQConnection, concurrency: 3 },
   );
@@ -33,6 +61,7 @@ export function startWorker() {
   worker.on('failed', async (job, err) => {
     if (!job) return;
     console.error(`[worker] scan ${job.data.scanId} failed:`, err.message);
+    await emitEvent(job.data.scanId, 'error', `Scan failed: ${err.message}`);
     await db
       .update(scans)
       .set({ status: 'failed', errorMessage: err.message })
