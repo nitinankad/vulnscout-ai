@@ -77,7 +77,7 @@ function DashboardMockup() {
         <span className="w-3 h-3 rounded-full bg-yellow-500/70" />
         <span className="w-3 h-3 rounded-full bg-primary/70" />
         <div className="ml-4 flex-1 bg-[oklch(0.13_0.01_200)] rounded-md px-3 py-1 text-xs text-muted-foreground font-mono">
-          app.vulnscout.ai/scans/acme-api-v2
+          vulnscout.ai/app/scans/acme-api-v2
         </div>
       </div>
 
@@ -111,15 +111,15 @@ function DashboardMockup() {
           {findings.map((f, i) => (
             <div
               key={i}
-              className="flex items-center gap-3 rounded-lg px-3 py-2.5 bg-[oklch(0.11_0.012_200)] border border-border/50 hover:border-border transition-colors"
+              className="relative flex items-center gap-3 rounded-lg px-3 py-2.5 bg-[oklch(0.11_0.012_200)] border border-border/50 hover:border-border transition-colors"
             >
-              <span className={`text-[10px] font-mono font-bold px-1.5 py-0.5 rounded ${methodColor[f.method]}`}>
+              <span className={`text-[10px] font-mono font-bold px-1.5 py-0.5 rounded w-14 text-center flex-shrink-0 ${methodColor[f.method]}`}>
                 {f.method}
               </span>
-              <span className="text-xs text-muted-foreground font-mono flex-1 truncate">{f.path}</span>
-              <span className="text-xs text-foreground/80 hidden sm:block">{f.vuln}</span>
+              <span className="absolute left-1/2 -translate-x-1/2 text-xs text-muted-foreground font-mono pointer-events-none">{f.path}</span>
+              <span className="text-xs text-foreground/80 hidden sm:block ml-auto">{f.vuln}</span>
               <span
-                className={`text-[10px] font-semibold uppercase px-2 py-0.5 rounded-full border ${severityColor[f.severity]}`}
+                className={`text-[10px] font-semibold uppercase px-2 py-0.5 rounded-full border flex-shrink-0 ${severityColor[f.severity]}`}
               >
                 {f.severity}
               </span>
