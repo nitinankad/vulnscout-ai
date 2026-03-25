@@ -2,6 +2,7 @@ import { Link } from 'react-router-dom'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { SEO } from '@/components/SEO'
 
 const FEATURES = [
   {
@@ -139,6 +140,11 @@ function DashboardMockup() {
 export function Home() {
   return (
     <>
+      <SEO
+        title="VulnScout AI"
+        description="VulnScout AI spins up an isolated sandbox of your backend and uses an AI agent to actively pentest your APIs — finding SQL injection, auth bypass, IDOR, and more with reproducible proof."
+        path="/"
+      />
       {/* Hero */}
       <section className="relative overflow-hidden pt-24 pb-20 px-6">
         <div className="absolute inset-0 pointer-events-none bg-grid" />

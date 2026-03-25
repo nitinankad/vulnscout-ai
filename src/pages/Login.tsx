@@ -4,6 +4,7 @@ import { useAuth } from '@/context/auth'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { SEO } from '@/components/SEO'
 
 export function Login() {
   const { login } = useAuth()
@@ -21,6 +22,7 @@ export function Login() {
 
   return (
     <div className="min-h-screen bg-background flex flex-col">
+      <SEO title="Sign In" description="Sign in to your VulnScout AI account." path="/login" noindex />
       {/* Nav */}
       <header className="border-b border-border/60 px-6 h-16 flex items-center">
         <Link to="/" className="flex items-center gap-2">

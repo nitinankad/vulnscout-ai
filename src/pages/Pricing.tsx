@@ -2,6 +2,7 @@ import { Link } from 'react-router-dom'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { SEO } from '@/components/SEO'
 
 const PLANS = [
   {
@@ -94,6 +95,11 @@ function Check({ on }: { on: boolean | string }) {
 export function Pricing() {
   return (
     <>
+      <SEO
+        title="Pricing"
+        description="Start for free and scale as you grow. VulnScout AI offers a free Starter plan and Pro/Enterprise tiers for teams that need more scans, deeper attack profiles, and priority support."
+        path="/pricing"
+      />
       {/* Hero */}
       <section className="relative overflow-hidden pt-20 pb-16 px-6 border-b border-border">
         <div className="absolute inset-0 pointer-events-none bg-grid" />

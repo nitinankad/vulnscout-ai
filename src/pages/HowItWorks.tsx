@@ -2,6 +2,7 @@ import { Link } from 'react-router-dom'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
+import { SEO } from '@/components/SEO'
 
 const STEPS = [
   {
@@ -154,6 +155,11 @@ const FAQS = [
 export function HowItWorks() {
   return (
     <>
+      <SEO
+        title="How It Works"
+        description="See how VulnScout AI connects to your service, spins up an isolated sandbox, runs an AI-driven attack chain, and delivers a findings report — all in minutes."
+        path="/how-it-works"
+      />
       {/* Hero */}
       <section className="relative overflow-hidden pt-20 pb-16 px-6 border-b border-border">
         <div className="absolute inset-0 pointer-events-none bg-grid" />
