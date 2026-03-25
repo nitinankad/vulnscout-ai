@@ -41,7 +41,7 @@ const PROFILES = [
   },
 ]
 
-type SourceTab = 'github' | 'docker' | 'openapi'
+type SourceTab = 'github' | 'openapi'
 
 export function NewScan() {
   const navigate = useNavigate()
@@ -116,7 +116,7 @@ export function NewScan() {
           <div>
             <Label className="text-xs text-muted-foreground uppercase tracking-wider mb-3 block">Service source</Label>
             <div className="flex gap-1 bg-muted/20 border border-border rounded-lg p-1 w-fit">
-              {(['github', 'docker', 'openapi'] as SourceTab[]).map((t) => (
+              {(['github', 'openapi'] as SourceTab[]).map((t) => (
                 <button
                   key={t}
                   onClick={() => setSourceTab(t)}
@@ -126,7 +126,7 @@ export function NewScan() {
                       : 'text-muted-foreground hover:text-foreground'
                   }`}
                 >
-                  {t === 'github' ? 'GitHub' : t === 'docker' ? 'Docker image' : 'OpenAPI spec'}
+                  {t === 'github' ? 'GitHub' : 'OpenAPI spec'}
                 </button>
               ))}
             </div>
@@ -154,17 +154,6 @@ export function NewScan() {
                   className="bg-card border-border font-mono text-sm w-48"
                 />
               </div>
-            </div>
-          )}
-
-          {sourceTab === 'docker' && (
-            <div className="space-y-1.5">
-              <Label htmlFor="image">Docker image</Label>
-              <Input
-                id="image"
-                placeholder="docker.io/your-org/your-service:latest"
-                className="bg-card border-border font-mono text-sm"
-              />
             </div>
           )}
 

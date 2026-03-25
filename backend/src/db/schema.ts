@@ -10,7 +10,7 @@ import {
 
 // ─── Enums ────────────────────────────────────────────────────────────────────
 
-export const sourceTypeEnum = pgEnum('source_type', ['github']);
+export const sourceTypeEnum = pgEnum('source_type', ['github', 'openapi']);
 export const scanStatusEnum = pgEnum('scan_status', ['queued', 'running', 'completed', 'failed']);
 export const severityEnum = pgEnum('severity', ['critical', 'high', 'medium', 'low', 'info']);
 

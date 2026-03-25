@@ -10,7 +10,7 @@ router.use(requireAuth);
 
 const createSchema = z.object({
   name: z.string().min(1),
-  source_type: z.enum(['github']),
+  source_type: z.enum(['github', 'openapi']),
   source: z.string().min(1),
   branch: z.string().optional(),
 });

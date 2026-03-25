@@ -91,7 +91,7 @@ export function startWorker() {
           })
           .where(eq(scans.id, scanId));
 
-        await emitEvent(scanId, 'success', `Scan complete · ${Math.round(durationMs / 1000)}s`);
+        await emitEvent(scanId, 'success', `Scan complete · ${Math.round(durationMs / 1000)}s`, true);
         console.log(`[worker] scan ${scanId} completed · ${agentResult.findingsCount} findings`);
       } finally {
         if (sandbox) await teardownSandbox(sandbox, scanId);
@@ -103,7 +103,7 @@ export function startWorker() {
   worker.on('failed', async (job, err) => {
     if (!job) return;
     console.error(`[worker] scan ${job.data.scanId} failed:`, err.message);
-    await emitEvent(job.data.scanId, 'error', `Scan failed: ${err.message}`);
+    await emitEvent(job.data.scanId, 'error', `Scan failed: ${err.message}`, true);
     await db
       .update(scans)
       .set({ status: 'failed', errorMessage: err.message })

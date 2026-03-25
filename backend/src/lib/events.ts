@@ -6,17 +6,19 @@ export interface ScanEvent {
   type: ScanEventType;
   message: string;
   timestamp: string;
+  done?: boolean;   // true on the final event — client should stop listening
 }
 
 /**
  * Publishes a scan event to the Redis pub/sub channel for that scan.
- * The frontend (Phase 6) will subscribe to scan:{scanId} and stream these to the browser.
+ * The frontend subscribes to scan:{scanId} via Socket.IO and streams these to the browser.
  */
 export async function emitEvent(
   scanId: string,
   type: ScanEventType,
   message: string,
+  done = false,
 ): Promise<void> {
-  const event: ScanEvent = { type, message, timestamp: new Date().toISOString() };
+  const event: ScanEvent = { type, message, timestamp: new Date().toISOString(), done };
   await redisClient.publish(`scan:${scanId}`, JSON.stringify(event));
 }

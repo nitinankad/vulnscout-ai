@@ -1,9 +1,11 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Progress } from '@/components/ui/progress'
 import { MOCK_SCANS, MOCK_FINDINGS, type Finding, type Severity } from '@/lib/mock-data'
+import { useAuth } from '@/context/auth'
+import { useScanStream, type ScanEvent } from '@/hooks/useScanStream'
 
 // ─── Severity helpers ────────────────────────────────────────────────────────
 
@@ -23,9 +25,9 @@ const METHOD_COLOR: Record<string, string> = {
   DELETE: 'text-destructive bg-destructive/10',
 }
 
-// ─── Live scan events (simulated) ────────────────────────────────────────────
+// ─── Live scan events (mock demo) ─────────────────────────────────────────────
 
-const SCAN_EVENTS = [
+const MOCK_SCAN_EVENTS = [
   { t: 300,  text: 'Cloning repository…', type: 'info' },
   { t: 1000, text: 'Building Docker image…', type: 'info' },
   { t: 2000, text: 'Sandbox network created · sandbox-abc123', type: 'info' },
@@ -49,7 +51,7 @@ const SCAN_EVENTS = [
   { t: 14600, text: 'Generating report…', type: 'info' },
   { t: 15200, text: 'Sandbox torn down · all containers removed', type: 'info' },
   { t: 15500, text: 'Scan complete · 2 critical · 2 high · 1 medium · 5 low', type: 'success' },
-]
+] as const
 
 const EVENT_COLOR: Record<string, string> = {
   critical: 'text-destructive',
@@ -57,6 +59,7 @@ const EVENT_COLOR: Record<string, string> = {
   medium: 'text-yellow-400',
   success: 'text-primary',
   info: 'text-muted-foreground',
+  error: 'text-destructive',
 }
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
@@ -142,128 +145,202 @@ function FindingRow({ finding, expanded, onToggle }: { finding: Finding; expande
   )
 }
 
+// ─── Running view (shared by mock and real) ──────────────────────────────────
+
+interface LiveEvent {
+  text: string
+  type: string
+  ts: string
+}
+
+function phaseFromEvent(text: string): string {
+  if (/clone|ingest|build|docker/i.test(text)) return 'Building image…'
+  if (/static|endpoint|analys/i.test(text)) return 'Running static analysis…'
+  if (/sandbox|network|health|depend/i.test(text)) return 'Spinning up sandbox…'
+  if (/agent|attack|scan|probe|inject|idor|auth/i.test(text)) return 'AI agent attacking…'
+  if (/complete|done|report|torn/i.test(text)) return 'Finishing…'
+  return 'Running…'
+}
+
+function RunningView({
+  events,
+  phase,
+  progress,
+  backPath,
+}: {
+  events: LiveEvent[]
+  phase: string
+  progress: number
+  backPath: string
+}) {
+  const logRef = useRef<HTMLDivElement>(null)
+  const navigate = useNavigate()
+
+  useEffect(() => {
+    requestAnimationFrame(() => {
+      logRef.current?.scrollTo({ top: logRef.current.scrollHeight, behavior: 'smooth' })
+    })
+  }, [events.length])
+
+  return (
+    <div className="p-8 max-w-3xl">
+      <button
+        className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors mb-6"
+        onClick={() => navigate(backPath)}
+      >
+        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+        </svg>
+        Overview
+      </button>
+
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <div className="flex items-center gap-2 mb-1">
+            <span className="w-2 h-2 rounded-full bg-yellow-400 animate-pulse" />
+            <h1 className="text-xl font-bold text-foreground">Scan in progress</h1>
+          </div>
+          <p className="text-sm text-muted-foreground">acme-corp/backend-api · main</p>
+        </div>
+        <Badge variant="outline" className="text-yellow-400 border-yellow-400/30 bg-yellow-400/10 text-xs">
+          Running
+        </Badge>
+      </div>
+
+      {/* Progress */}
+      <div className="bg-card border border-border rounded-xl p-5 mb-4">
+        <div className="flex items-center justify-between mb-3">
+          <p className="text-sm font-medium text-foreground">{phase}</p>
+          <p className="text-sm text-primary font-mono">{progress}%</p>
+        </div>
+        <Progress value={progress} className="h-1.5" />
+
+        <div className="flex items-center justify-between mt-4">
+          {['Ingest', 'Analysis', 'Sandbox', 'Attacking', 'Report'].map((p, i) => {
+            const thresholds = [10, 30, 45, 90, 100]
+            const active = progress >= (thresholds[i - 1] ?? 0)
+            const current = progress >= (thresholds[i - 1] ?? 0) && progress < thresholds[i]
+            return (
+              <div key={p} className="flex flex-col items-center gap-1">
+                <div className={`w-2 h-2 rounded-full ${active ? 'bg-primary' : 'bg-border'} ${current ? 'ring-2 ring-primary/30' : ''}`} />
+                <span className={`text-[10px] ${active ? 'text-primary' : 'text-muted-foreground'}`}>{p}</span>
+              </div>
+            )
+          })}
+        </div>
+      </div>
+
+      {/* Live log */}
+      <div className="bg-[oklch(0.07_0.01_200)] border border-border rounded-xl overflow-hidden">
+        <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border">
+          <span className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
+          <p className="text-xs text-muted-foreground font-mono">Live event log</p>
+        </div>
+        <div ref={logRef} className="h-72 overflow-y-auto p-4 space-y-1.5 font-mono text-xs">
+          {events.map((ev, i) => (
+            <div key={i} className="flex items-start gap-2">
+              <span className="text-muted-foreground/40 flex-shrink-0 select-none">
+                {new Date(ev.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+              </span>
+              <span className={EVENT_COLOR[ev.type] ?? 'text-muted-foreground'}>{ev.text}</span>
+            </div>
+          ))}
+          {events.length === 0 && <p className="text-muted-foreground/40">Connecting…</p>}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ─── Main component ───────────────────────────────────────────────────────────
 
 export function ScanDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
-  const isRunning = id === 'scan-running'
-  const scan = isRunning ? null : MOCK_SCANS.find(s => s.id === id)
+  const { token } = useAuth()
 
-  // Live scan simulation state
+  // ── Determine mode ────────────────────────────────────────────────────────
+  const isMockRunning = id === 'scan-running'
+  const isRealScan = !!id && !isMockRunning
+
+  // ── Live events state ─────────────────────────────────────────────────────
+  const [events, setEvents] = useState<LiveEvent[]>([])
+  const [phase, setPhase] = useState('Initializing…')
   const [progress, setProgress] = useState(0)
-  const [events, setEvents] = useState<typeof SCAN_EVENTS>([])
-  const [phase, setPhase] = useState('Spinning up sandbox…')
   const [done, setDone] = useState(false)
-  const logRef = useRef<HTMLDivElement>(null)
 
+  // ── Completed view state (must be unconditional) ──────────────────────────
+  const [filter, setFilter] = useState<Severity | 'all'>('all')
+  const [expanded, setExpanded] = useState<Set<string>>(new Set())
+
+  // ── Real scan streaming ───────────────────────────────────────────────────
+  const handleEvent = useCallback((ev: ScanEvent) => {
+    setEvents((prev) => [
+      ...prev,
+      { text: ev.message, type: ev.type, ts: ev.timestamp },
+    ])
+    setPhase(phaseFromEvent(ev.message))
+    // Crude progress heuristic based on phase keywords
+    setProgress((prev) => {
+      if (/clone|ingest/i.test(ev.message)) return Math.max(prev, 5)
+      if (/build|docker/i.test(ev.message)) return Math.max(prev, 12)
+      if (/static|analys/i.test(ev.message)) return Math.max(prev, 28)
+      if (/sandbox|network/i.test(ev.message)) return Math.max(prev, 35)
+      if (/health.*pass/i.test(ev.message)) return Math.max(prev, 45)
+      if (/agent.*init/i.test(ev.message)) return Math.max(prev, 50)
+      if (/agent.*done/i.test(ev.message)) return Math.max(prev, 90)
+      if (/scan complete/i.test(ev.message)) return 100
+      return Math.min(prev + 1, 95)
+    })
+  }, [])
+
+  const handleDone = useCallback(() => {
+    setProgress(100)
+    setTimeout(() => setDone(true), 800)
+  }, [])
+
+  useScanStream(isRealScan ? (id ?? null) : null, {
+    token,
+    onEvent: handleEvent,
+    onDone: handleDone,
+    enabled: isRealScan && !done,
+  })
+
+  // ── Mock demo simulation ──────────────────────────────────────────────────
   useEffect(() => {
-    if (!isRunning) return
+    if (!isMockRunning) return
     const timers: ReturnType<typeof setTimeout>[] = []
 
-    SCAN_EVENTS.forEach(ev => {
+    MOCK_SCAN_EVENTS.forEach((ev) => {
       const t = setTimeout(() => {
-        setEvents(prev => [...prev, ev])
+        setEvents((prev) => [...prev, { text: ev.text, type: ev.type, ts: new Date().toISOString() }])
         const pct = Math.round((ev.t / 15500) * 100)
         setProgress(pct)
         if (ev.t < 4500) setPhase('Building sandbox…')
         else if (ev.t < 6000) setPhase('Running static analysis…')
         else if (ev.t < 15000) setPhase('AI agent attacking…')
         else setPhase('Generating report…')
-        if (ev.t >= 15500) {
-          setTimeout(() => setDone(true), 600)
-        }
-        requestAnimationFrame(() => {
-          logRef.current?.scrollTo({ top: logRef.current.scrollHeight, behavior: 'smooth' })
-        })
+        if (ev.t >= 15500) setTimeout(() => setDone(true), 600)
       }, ev.t)
       timers.push(t)
     })
 
     return () => timers.forEach(clearTimeout)
-  }, [isRunning])
+  }, [isMockRunning])
 
-  // Completed scan
-  const [filter, setFilter] = useState<Severity | 'all'>('all')
-  const [expanded, setExpanded] = useState<Set<string>>(new Set())
-  const findings = filter === 'all' ? MOCK_FINDINGS : MOCK_FINDINGS.filter(f => f.severity === filter)
-  const displayScan = scan ?? MOCK_SCANS[0]
+  // ── Derived values (no hooks below this line) ─────────────────────────────
+  const isRunning = (isMockRunning || isRealScan) && !done
+  const scan = isRealScan ? MOCK_SCANS[0] : (MOCK_SCANS.find((s) => s.id === id) ?? MOCK_SCANS[0])
+  const findings = filter === 'all' ? MOCK_FINDINGS : MOCK_FINDINGS.filter((f) => f.severity === filter)
 
-  // ── Running view ──────────────────────────────────────────────────────────
-  if (isRunning && !done) {
-    return (
-      <div className="p-8 max-w-3xl">
-        <button
-          className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors mb-6"
-          onClick={() => navigate('/app')}
-        >
-          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-          </svg>
-          Overview
-        </button>
-
-        <div className="flex items-center justify-between mb-6">
-          <div>
-            <div className="flex items-center gap-2 mb-1">
-              <span className="w-2 h-2 rounded-full bg-yellow-400 animate-pulse" />
-              <h1 className="text-xl font-bold text-foreground">Scan in progress</h1>
-            </div>
-            <p className="text-sm text-muted-foreground">acme-corp/backend-api · main</p>
-          </div>
-          <Badge variant="outline" className="text-yellow-400 border-yellow-400/30 bg-yellow-400/10 text-xs">
-            Running
-          </Badge>
-        </div>
-
-        {/* Progress */}
-        <div className="bg-card border border-border rounded-xl p-5 mb-4">
-          <div className="flex items-center justify-between mb-3">
-            <p className="text-sm font-medium text-foreground">{phase}</p>
-            <p className="text-sm text-primary font-mono">{progress}%</p>
-          </div>
-          <Progress value={progress} className="h-1.5" />
-
-          {/* Phase steps */}
-          <div className="flex items-center justify-between mt-4">
-            {['Ingest', 'Analysis', 'Sandbox', 'Attacking', 'Report'].map((p, i) => {
-              const thresholds = [10, 30, 45, 90, 100]
-              const active = progress >= (thresholds[i - 1] ?? 0)
-              const current = progress >= (thresholds[i - 1] ?? 0) && progress < thresholds[i]
-              return (
-                <div key={p} className="flex flex-col items-center gap-1">
-                  <div className={`w-2 h-2 rounded-full ${active ? 'bg-primary' : 'bg-border'} ${current ? 'ring-2 ring-primary/30' : ''}`} />
-                  <span className={`text-[10px] ${active ? 'text-primary' : 'text-muted-foreground'}`}>{p}</span>
-                </div>
-              )
-            })}
-          </div>
-        </div>
-
-        {/* Live log */}
-        <div className="bg-[oklch(0.07_0.01_200)] border border-border rounded-xl overflow-hidden">
-          <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border">
-            <span className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
-            <p className="text-xs text-muted-foreground font-mono">Live event log</p>
-          </div>
-          <div ref={logRef} className="h-72 overflow-y-auto p-4 space-y-1.5 font-mono text-xs">
-            {events.map((ev, i) => (
-              <div key={i} className="flex items-start gap-2">
-                <span className="text-muted-foreground/40 flex-shrink-0 select-none">
-                  {String(Math.floor(ev.t / 1000)).padStart(2, '0')}s
-                </span>
-                <span className={EVENT_COLOR[ev.type]}>{ev.text}</span>
-              </div>
-            ))}
-            {events.length === 0 && <p className="text-muted-foreground/40">Initializing…</p>}
-          </div>
-        </div>
-      </div>
-    )
-  }
-
-  // ── Completed view ─────────────────────────────────────────────────────────
-  return (
+  return isRunning ? (
+    <RunningView
+      events={events}
+      phase={phase}
+      progress={progress}
+      backPath="/app"
+    />
+  ) : (
     <div className="p-8 max-w-4xl">
       <button
         className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors mb-6"
@@ -278,8 +355,8 @@ export function ScanDetail() {
       {/* Header */}
       <div className="flex items-start justify-between mb-6">
         <div>
-          <h1 className="text-xl font-bold text-foreground mb-1">{displayScan.service_name}</h1>
-          <p className="text-sm text-muted-foreground">{displayScan.service_source}{displayScan.branch ? ` · ${displayScan.branch}` : ''}</p>
+          <h1 className="text-xl font-bold text-foreground mb-1">{scan.service_name}</h1>
+          <p className="text-sm text-muted-foreground">{scan.service_source}{scan.branch ? ` · ${scan.branch}` : ''}</p>
         </div>
         <div className="flex items-center gap-2">
           <Button variant="outline" size="sm" className="h-8 text-xs border-border">
@@ -294,11 +371,11 @@ export function ScanDetail() {
       {/* Stats */}
       <div className="grid grid-cols-4 gap-3 mb-6">
         {[
-          { label: 'Critical', count: displayScan.critical, cls: 'text-destructive bg-destructive/10 border-destructive/20' },
-          { label: 'High', count: displayScan.high, cls: 'text-orange-400 bg-orange-400/10 border-orange-400/20' },
-          { label: 'Medium', count: displayScan.medium, cls: 'text-yellow-400 bg-yellow-400/10 border-yellow-400/20' },
-          { label: 'Low', count: displayScan.low, cls: 'text-blue-400 bg-blue-400/10 border-blue-400/20' },
-        ].map(s => (
+          { label: 'Critical', count: scan.critical, cls: 'text-destructive bg-destructive/10 border-destructive/20' },
+          { label: 'High', count: scan.high, cls: 'text-orange-400 bg-orange-400/10 border-orange-400/20' },
+          { label: 'Medium', count: scan.medium, cls: 'text-yellow-400 bg-yellow-400/10 border-yellow-400/20' },
+          { label: 'Low', count: scan.low, cls: 'text-blue-400 bg-blue-400/10 border-blue-400/20' },
+        ].map((s) => (
           <div key={s.label} className={`rounded-xl border p-4 text-center ${s.cls}`}>
             <p className="text-2xl font-bold">{s.count}</p>
             <p className="text-xs mt-0.5 opacity-80">{s.label}</p>
@@ -308,16 +385,16 @@ export function ScanDetail() {
 
       {/* Meta */}
       <div className="flex items-center gap-6 text-xs text-muted-foreground mb-6 pb-6 border-b border-border">
-        <span>Profile: <span className="text-foreground">{displayScan.attack_profile}</span></span>
-        <span>Endpoints: <span className="text-foreground">{displayScan.endpoints_scanned}</span></span>
-        <span>Requests fired: <span className="text-foreground">{displayScan.requests_fired.toLocaleString()}</span></span>
-        <span>Duration: <span className="text-foreground">{displayScan.duration}</span></span>
+        <span>Profile: <span className="text-foreground">{scan.attack_profile}</span></span>
+        <span>Endpoints: <span className="text-foreground">{scan.endpoints_scanned}</span></span>
+        <span>Requests fired: <span className="text-foreground">{scan.requests_fired.toLocaleString()}</span></span>
+        <span>Duration: <span className="text-foreground">{scan.duration}</span></span>
         <span className="ml-auto text-primary">Scan complete</span>
       </div>
 
       {/* Filter tabs */}
       <div className="flex items-center gap-1 mb-4">
-        {(['all', 'critical', 'high', 'medium', 'low'] as const).map(f => (
+        {(['all', 'critical', 'high', 'medium', 'low'] as const).map((f) => (
           <button
             key={f}
             onClick={() => setFilter(f)}
@@ -332,7 +409,7 @@ export function ScanDetail() {
         ))}
         <div className="ml-auto flex items-center gap-2">
           <button
-            onClick={() => setExpanded(new Set(findings.map(f => f.id)))}
+            onClick={() => setExpanded(new Set(findings.map((f) => f.id)))}
             className="text-xs text-muted-foreground hover:text-foreground transition-colors"
           >
             Expand all
@@ -349,12 +426,12 @@ export function ScanDetail() {
 
       {/* Findings */}
       <div className="space-y-2">
-        {findings.map(f => (
+        {findings.map((f) => (
           <FindingRow
             key={f.id}
             finding={f}
             expanded={expanded.has(f.id)}
-            onToggle={() => setExpanded(prev => {
+            onToggle={() => setExpanded((prev) => {
               const next = new Set(prev)
               next.has(f.id) ? next.delete(f.id) : next.add(f.id)
               return next

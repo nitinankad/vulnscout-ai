@@ -2,26 +2,34 @@ import { createContext, useContext, useState, type ReactNode } from 'react'
 
 interface AuthCtx {
   isAuthed: boolean
-  login: () => void
+  token: string | null
+  login: (token?: string) => void
   logout: () => void
 }
 
 const AuthContext = createContext<AuthCtx | null>(null)
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [isAuthed, setIsAuthed] = useState(() => sessionStorage.getItem('vs_authed') === '1')
+  const [isAuthed, setIsAuthed] = useState(() => localStorage.getItem('vs_authed') === '1')
+  const [token, setToken] = useState<string | null>(() => localStorage.getItem('vs_token'))
 
-  const login = () => {
-    sessionStorage.setItem('vs_authed', '1')
+  const login = (jwt?: string) => {
+    localStorage.setItem('vs_authed', '1')
+    if (jwt) {
+      localStorage.setItem('vs_token', jwt)
+      setToken(jwt)
+    }
     setIsAuthed(true)
   }
 
   const logout = () => {
-    sessionStorage.removeItem('vs_authed')
+    localStorage.removeItem('vs_authed')
+    localStorage.removeItem('vs_token')
     setIsAuthed(false)
+    setToken(null)
   }
 
-  return <AuthContext value={{ isAuthed, login, logout }}>{children}</AuthContext>
+  return <AuthContext value={{ isAuthed, token, login, logout }}>{children}</AuthContext>
 }
 
 export function useAuth() {
