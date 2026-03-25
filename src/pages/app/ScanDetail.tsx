@@ -185,7 +185,7 @@ export function ScanDetail() {
 
   // Completed scan
   const [filter, setFilter] = useState<Severity | 'all'>('all')
-  const [expanded, setExpanded] = useState<string | null>(null)
+  const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const findings = filter === 'all' ? MOCK_FINDINGS : MOCK_FINDINGS.filter(f => f.severity === filter)
   const displayScan = scan ?? MOCK_SCANS[0]
 
@@ -330,6 +330,21 @@ export function ScanDetail() {
             {f === 'all' ? `All (${MOCK_FINDINGS.length})` : f}
           </button>
         ))}
+        <div className="ml-auto flex items-center gap-2">
+          <button
+            onClick={() => setExpanded(new Set(findings.map(f => f.id)))}
+            className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+          >
+            Expand all
+          </button>
+          <span className="text-border">·</span>
+          <button
+            onClick={() => setExpanded(new Set())}
+            className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+          >
+            Collapse all
+          </button>
+        </div>
       </div>
 
       {/* Findings */}
@@ -338,8 +353,12 @@ export function ScanDetail() {
           <FindingRow
             key={f.id}
             finding={f}
-            expanded={expanded === f.id}
-            onToggle={() => setExpanded(expanded === f.id ? null : f.id)}
+            expanded={expanded.has(f.id)}
+            onToggle={() => setExpanded(prev => {
+              const next = new Set(prev)
+              next.has(f.id) ? next.delete(f.id) : next.add(f.id)
+              return next
+            })}
           />
         ))}
       </div>
