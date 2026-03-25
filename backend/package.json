@@ -16,6 +16,7 @@
     "db:generate": "drizzle-kit generate"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.80.0",
     "@types/dockerode": "^4.0.1",
     "bcryptjs": "^3.0.3",
     "bullmq": "^5.71.0",

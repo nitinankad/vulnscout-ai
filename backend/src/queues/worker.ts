@@ -7,6 +7,7 @@ import { emitEvent } from '../lib/events';
 import { decrypt } from '../lib/crypto';
 import { ingestRepo } from '../services/ingest';
 import { startSandbox, teardownSandbox, type SandboxContext } from '../services/sandbox';
+import { runAgent } from '../services/agent';
 import type { ScanJobData } from './index';
 
 export function startWorker() {
@@ -21,10 +22,9 @@ export function startWorker() {
       await emitEvent(scanId, 'info', `Scan started · profile: ${attackProfile}`);
 
       try {
-        // Mark as running
         await db.update(scans).set({ status: 'running' }).where(eq(scans.id, scanId));
 
-        // Load service + user records
+        // Load records
         const [service] = await db.select().from(services).where(eq(services.id, serviceId)).limit(1);
         if (!service) throw new Error(`Service ${serviceId} not found`);
 
@@ -35,7 +35,7 @@ export function startWorker() {
           ? decrypt(user.githubTokenEncrypted)
           : null;
 
-        // ── Phase 1: Ingest & Build ────────────────────────────────────────────
+        // ── Phase 1: Ingest & Build ──────────────────────────────────────────
         await emitEvent(scanId, 'info', '── Phase 1: Ingest & Build');
         const ingestResult = await ingestRepo({
           repoUrl: service.source,
@@ -43,9 +43,8 @@ export function startWorker() {
           githubToken,
           scanId,
         });
-        await emitEvent(scanId, 'success', `Image ready: ${ingestResult.imageTag}`);
 
-        // ── Phase 2: Sandbox ───────────────────────────────────────────────────
+        // ── Phase 2: Sandbox ─────────────────────────────────────────────────
         await emitEvent(scanId, 'info', '── Phase 2: Sandbox');
         sandbox = await startSandbox({
           scanId,
@@ -55,21 +54,35 @@ export function startWorker() {
         });
         await emitEvent(scanId, 'success', `Sandbox ready · ${sandbox.targetBaseUrl}`);
 
-        // ── Phases 3–4 will go here (static analysis, AI agent) ───────────────
+        // ── Phase 3: AI Agent ────────────────────────────────────────────────
+        await emitEvent(scanId, 'info', '── Phase 3: AI Agent');
+        const agentResult = await runAgent({
+          scanId,
+          targetBaseUrl: sandbox.targetBaseUrl,
+          attackProfile: attackProfile as 'Quick' | 'Standard' | 'Aggressive',
+        });
+
+        await emitEvent(
+          scanId,
+          'success',
+          `Agent done · ${agentResult.findingsCount} findings · ${agentResult.requestsFired} requests`,
+        );
 
         const durationMs = Date.now() - startedAt;
         await db
           .update(scans)
-          .set({ status: 'completed', completedAt: new Date(), durationMs })
+          .set({
+            status: 'completed',
+            completedAt: new Date(),
+            durationMs,
+            endpointsScanned: agentResult.requestsFired, // approximation until static analysis lands
+          })
           .where(eq(scans.id, scanId));
 
         await emitEvent(scanId, 'success', `Scan complete · ${Math.round(durationMs / 1000)}s`);
-        console.log(`[worker] scan ${scanId} completed in ${durationMs}ms`);
+        console.log(`[worker] scan ${scanId} completed · ${agentResult.findingsCount} findings`);
       } finally {
-        // Always tear down the sandbox, whether we succeeded or failed
-        if (sandbox) {
-          await teardownSandbox(sandbox, scanId);
-        }
+        if (sandbox) await teardownSandbox(sandbox, scanId);
       }
     },
     { connection: bullMQConnection, concurrency: 3 },
