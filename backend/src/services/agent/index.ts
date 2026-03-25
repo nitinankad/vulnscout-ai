@@ -5,6 +5,7 @@ import { findings, scans } from '../../db/schema';
 import { emitEvent } from '../../lib/events';
 import { AGENT_TOOLS, type HttpRequestInput, type SetAuthInput, type RecordFindingInput } from './tools';
 import { buildSystemPrompt, buildInitialMessage } from './prompt';
+import type { AgentEndpoint } from '../static-analysis';
 
 const WALL_CLOCK_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
 const MAX_TOKENS_PER_TURN = 4096;
@@ -16,7 +17,7 @@ export interface AgentRunOptions {
   scanId: string;
   targetBaseUrl: string;
   attackProfile: 'Quick' | 'Standard' | 'Aggressive';
-  knownEndpoints?: string[];
+  knownEndpoints?: AgentEndpoint[];
 }
 
 export interface AgentRunResult {
@@ -91,6 +92,7 @@ export async function runAgent(options: AgentRunOptions): Promise<AgentRunResult
       const result = await executeTool(block.name, block.input as Record<string, unknown>, {
         scanId,
         targetBaseUrl,
+        knownEndpoints,
         state,
       });
 
@@ -131,6 +133,7 @@ export async function runAgent(options: AgentRunOptions): Promise<AgentRunResult
 interface ToolContext {
   scanId: string;
   targetBaseUrl: string;
+  knownEndpoints: AgentEndpoint[];
   state: {
     authToken: string | null;
     findingsCount: number;
@@ -155,7 +158,7 @@ async function executeTool(
     }
 
     case 'get_endpoints':
-      return { endpoints: [] }; // Minimal: static analysis feeds this in Phase 4
+      return { endpoints: ctx.knownEndpoints };
 
     case 'record_finding':
       return executeRecordFinding(input as unknown as RecordFindingInput, ctx);

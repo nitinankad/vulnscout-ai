@@ -8,6 +8,7 @@ import { decrypt } from '../lib/crypto';
 import { ingestRepo } from '../services/ingest';
 import { startSandbox, teardownSandbox, type SandboxContext } from '../services/sandbox';
 import { runAgent } from '../services/agent';
+import { analyseRepo, formatEndpointsForAgent } from '../services/static-analysis';
 import type { ScanJobData } from './index';
 
 export function startWorker() {
@@ -44,8 +45,18 @@ export function startWorker() {
           scanId,
         });
 
-        // ── Phase 2: Sandbox ─────────────────────────────────────────────────
-        await emitEvent(scanId, 'info', '── Phase 2: Sandbox');
+        // ── Phase 2: Static Analysis ─────────────────────────────────────────
+        await emitEvent(scanId, 'info', '── Phase 2: Static Analysis');
+        const analysisResult = await analyseRepo(ingestResult.repoDir, scanId);
+        const knownEndpoints = formatEndpointsForAgent(analysisResult);
+
+        await db
+          .update(scans)
+          .set({ endpointsScanned: analysisResult.endpoints.length })
+          .where(eq(scans.id, scanId));
+
+        // ── Phase 3: Sandbox ─────────────────────────────────────────────────
+        await emitEvent(scanId, 'info', '── Phase 3: Sandbox');
         sandbox = await startSandbox({
           scanId,
           imageTag: ingestResult.imageTag,
@@ -54,12 +65,13 @@ export function startWorker() {
         });
         await emitEvent(scanId, 'success', `Sandbox ready · ${sandbox.targetBaseUrl}`);
 
-        // ── Phase 3: AI Agent ────────────────────────────────────────────────
-        await emitEvent(scanId, 'info', '── Phase 3: AI Agent');
+        // ── Phase 4: AI Agent ────────────────────────────────────────────────
+        await emitEvent(scanId, 'info', '── Phase 4: AI Agent');
         const agentResult = await runAgent({
           scanId,
           targetBaseUrl: sandbox.targetBaseUrl,
           attackProfile: attackProfile as 'Quick' | 'Standard' | 'Aggressive',
+          knownEndpoints,
         });
 
         await emitEvent(
@@ -75,7 +87,7 @@ export function startWorker() {
             status: 'completed',
             completedAt: new Date(),
             durationMs,
-            endpointsScanned: agentResult.requestsFired, // approximation until static analysis lands
+            endpointsScanned: analysisResult.endpoints.length,
           })
           .where(eq(scans.id, scanId));
 

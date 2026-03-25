@@ -1,7 +1,9 @@
+import type { AgentEndpoint } from '../static-analysis';
+
 export interface PromptContext {
   targetBaseUrl: string;
   attackProfile: 'Quick' | 'Standard' | 'Aggressive';
-  knownEndpoints: string[];
+  knownEndpoints: AgentEndpoint[];
 }
 
 const OWASP_CATEGORIES = `
@@ -31,11 +33,33 @@ const PROFILE_DEPTH: Record<PromptContext['attackProfile'], string> = {
     'mass assignment, and business logic flaws. Do not self-limit on request count.',
 };
 
+function formatEndpointList(endpoints: AgentEndpoint[]): string {
+  if (endpoints.length === 0) return '  (none — discover endpoints by probing common paths)';
+
+  return endpoints
+    .map((e) => {
+      const hints = e.risk_hints.length > 0 ? ` [risks: ${e.risk_hints.join(', ')}]` : '';
+      const auth = e.auth ? '' : ' [NO AUTH]';
+      return `  ${e.method.padEnd(7)} ${e.path}${auth}${hints}`;
+    })
+    .join('\n');
+}
+
 export function buildSystemPrompt(ctx: PromptContext): string {
-  const endpointList =
-    ctx.knownEndpoints.length > 0
-      ? ctx.knownEndpoints.map((e) => `  - ${e}`).join('\n')
-      : '  (none — discover endpoints by probing common paths)';
+  const endpointList = formatEndpointList(ctx.knownEndpoints);
+
+  // Surface high-priority targets for the agent
+  const priorityTargets = ctx.knownEndpoints
+    .filter((e) => e.risk_hints.length > 0 || !e.auth)
+    .slice(0, 20);
+
+  const prioritySection =
+    priorityTargets.length > 0
+      ? `\nPRIORITY TARGETS (flagged by static analysis)\n` +
+        priorityTargets
+          .map((e) => `  ${e.method.padEnd(7)} ${e.path} → ${e.risk_hints.join(', ') || 'no auth'}`)
+          .join('\n')
+      : '';
 
   return `You are an expert API security researcher conducting an authorized penetration test.
 
@@ -43,8 +67,9 @@ TARGET
   Base URL : ${ctx.targetBaseUrl}
   Profile  : ${ctx.attackProfile}
 
-KNOWN ENDPOINTS
+KNOWN ENDPOINTS (from static analysis)
 ${endpointList}
+${prioritySection}
 
 ATTACK SCOPE
 ${OWASP_CATEGORIES}
@@ -53,15 +78,16 @@ DEPTH GUIDANCE
 ${PROFILE_DEPTH[ctx.attackProfile]}
 
 METHODOLOGY
-1. Call get_endpoints() first to see any statically discovered routes.
-2. Probe common API paths: /api/users, /api/auth/login, /api/admin, /api/posts, /health, etc.
+1. Call get_endpoints() first — it returns the statically-discovered routes with risk annotations.
+2. Prioritise endpoints flagged [NO AUTH] or with risk hints like raw_sql, idor_candidate, no_auth.
 3. For each endpoint, send a legitimate request first to understand its shape and auth requirements.
 4. Then test attack scenarios relevant to that endpoint type:
    - Login endpoints      → SQL injection (' OR '1'='1--), weak credentials
    - Authenticated routes → try without a token, then with a low-priv token
-   - Resource routes (/users/:id, /orders/:id) → IDOR (swap IDs)
-   - Write endpoints (POST/PUT/DELETE) → CSRF, mass assignment, authorization
+   - Resource routes (/users/:id, /orders/:id) → IDOR (swap IDs between accounts)
+   - Write endpoints (POST/PUT/DELETE) → mass assignment, authorization bypass
    - Admin routes         → access with a regular-user token
+   - raw_sql hint         → prioritise injection payloads on that endpoint
 5. When you obtain a valid auth token (from a login response), call set_auth() so it is
    automatically injected into subsequent requests.
 6. Only call record_finding() when you have a concrete HTTP proof — the exact request and
@@ -78,9 +104,17 @@ RULES
 }
 
 export function buildInitialMessage(ctx: PromptContext): string {
+  const count = ctx.knownEndpoints.length;
+  const risky = ctx.knownEndpoints.filter((e) => e.risk_hints.length > 0 || !e.auth).length;
+
+  const hint =
+    count > 0
+      ? `Static analysis found ${count} endpoints (${risky} flagged as risky). `
+      : '';
+
   return (
     `Begin the penetration test of ${ctx.targetBaseUrl}.\n\n` +
-    `Start by calling get_endpoints() to see the known attack surface, then systematically ` +
-    `probe and attack the API according to the ${ctx.attackProfile} profile.`
+    `${hint}Start by calling get_endpoints() to see the full annotated attack surface, ` +
+    `then systematically probe and attack the API according to the ${ctx.attackProfile} profile.`
   );
 }
