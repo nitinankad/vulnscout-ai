@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { useAuth } from '@/context/auth'
+import { api } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -10,20 +11,32 @@ export function Login() {
   const { login } = useAuth()
   const navigate = useNavigate()
   const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [mode, setMode] = useState<'login' | 'register'>('login')
+  const [name, setName] = useState('')
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
 
-  function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     setLoading(true)
-    setTimeout(() => {
-      login()
+    setError(null)
+    try {
+      const res = mode === 'login'
+        ? await api.auth.login(email, password)
+        : await api.auth.register(email, password, name)
+      login(res.token, res.user)
       navigate('/app')
-    }, 800)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Something went wrong')
+    } finally {
+      setLoading(false)
+    }
   }
 
   return (
     <div className="min-h-screen bg-background flex flex-col">
       <SEO title="Sign In" description="Sign in to your VulnScout AI account." path="/login" noindex />
-      {/* Nav */}
       <header className="border-b border-border/60 px-6 h-16 flex items-center">
         <Link to="/" className="flex items-center gap-2">
           <svg className="w-6 h-6 text-primary" viewBox="0 0 24 24" fill="none" stroke="currentColor">
@@ -41,38 +54,58 @@ export function Login() {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
               </svg>
             </div>
-            <h1 className="text-2xl font-bold text-foreground tracking-tight">Welcome back</h1>
-            <p className="text-muted-foreground text-sm mt-1">Sign in to your VulnScout AI account</p>
+            <h1 className="text-2xl font-bold text-foreground tracking-tight">
+              {mode === 'login' ? 'Welcome back' : 'Create account'}
+            </h1>
+            <p className="text-muted-foreground text-sm mt-1">
+              {mode === 'login' ? 'Sign in to your VulnScout AI account' : 'Start scanning your APIs for free'}
+            </p>
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-4">
+            {mode === 'register' && (
+              <div className="space-y-1.5">
+                <Label htmlFor="name">Name</Label>
+                <Input
+                  id="name"
+                  value={name}
+                  onChange={e => setName(e.target.value)}
+                  placeholder="Jane Smith"
+                  className="bg-card border-border"
+                  required
+                />
+              </div>
+            )}
             <div className="space-y-1.5">
               <Label htmlFor="email">Email</Label>
               <Input
                 id="email"
                 type="email"
+                value={email}
+                onChange={e => setEmail(e.target.value)}
                 placeholder="you@company.com"
-                defaultValue="nobody@vulnscout.ai"
                 className="bg-card border-border"
                 required
               />
             </div>
             <div className="space-y-1.5">
-              <div className="flex items-center justify-between">
-                <Label htmlFor="password">Password</Label>
-                <a href="#" className="text-xs text-muted-foreground hover:text-primary transition-colors">
-                  Forgot password?
-                </a>
-              </div>
+              <Label htmlFor="password">Password</Label>
               <Input
                 id="password"
                 type="password"
+                value={password}
+                onChange={e => setPassword(e.target.value)}
                 placeholder="••••••••"
-                defaultValue="password"
                 className="bg-card border-border"
                 required
               />
             </div>
+
+            {error && (
+              <p className="text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-lg px-3 py-2">
+                {error}
+              </p>
+            )}
 
             <Button
               type="submit"
@@ -84,17 +117,21 @@ export function Login() {
                   <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 12a8 8 0 018-8v4l3-3-3-3V4a10 10 0 100 20v-2a8 8 0 01-8-8z" />
                   </svg>
-                  Signing in…
+                  {mode === 'login' ? 'Signing in…' : 'Creating account…'}
                 </span>
-              ) : 'Sign in'}
+              ) : mode === 'login' ? 'Sign in' : 'Create account'}
             </Button>
           </form>
 
           <p className="text-center text-sm text-muted-foreground mt-6">
-            Don't have an account?{' '}
-            <Link to="/signup" onClick={e => { e.preventDefault(); handleSubmit(e as unknown as React.FormEvent) }} className="text-primary hover:text-primary/80 transition-colors">
-              Get started free
-            </Link>
+            {mode === 'login' ? "Don't have an account? " : 'Already have an account? '}
+            <button
+              type="button"
+              onClick={() => { setMode(m => m === 'login' ? 'register' : 'login'); setError(null) }}
+              className="text-primary hover:text-primary/80 transition-colors"
+            >
+              {mode === 'login' ? 'Get started free' : 'Sign in'}
+            </button>
           </p>
         </div>
       </div>

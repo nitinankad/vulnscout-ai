@@ -12,7 +12,7 @@ import { NewScan } from '@/pages/app/NewScan'
 import { ScanDetail } from '@/pages/app/ScanDetail'
 import { Services } from '@/pages/app/Services'
 import { Reports } from '@/pages/app/Reports'
-import { Settings } from '@/pages/app/Placeholder'
+import { Settings } from '@/pages/app/Settings'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }): React.ReactElement {
   const { isAuthed } = useAuth()

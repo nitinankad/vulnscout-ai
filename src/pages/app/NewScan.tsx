@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { api } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -49,18 +50,40 @@ export function NewScan() {
   const [sourceTab, setSourceTab] = useState<SourceTab>('github')
   const [profile, setProfile] = useState('standard')
   const [attacks, setAttacks] = useState(ATTACK_CLASSES)
-  const [repoUrl, setRepoUrl] = useState('github.com/acme-corp/backend-api')
+  const [repoUrl, setRepoUrl] = useState('')
   const [branch, setBranch] = useState('main')
-  const [bearerToken, setBearerToken] = useState('')
   const [launching, setLaunching] = useState(false)
+  const [launchError, setLaunchError] = useState<string | null>(null)
 
   function toggleAttack(id: string) {
     setAttacks(a => a.map(x => x.id === id ? { ...x, on: !x.on } : x))
   }
 
-  function handleLaunch() {
+  async function handleLaunch() {
     setLaunching(true)
-    setTimeout(() => navigate('/app/scans/scan-running'), 1000)
+    setLaunchError(null)
+    try {
+      // Normalise repo URL to full https form
+      const source = repoUrl.startsWith('http') ? repoUrl : `https://${repoUrl}`
+      const name = repoUrl.split('/').slice(-2).join('/') || repoUrl
+
+      const service = await api.services.create({
+        name,
+        source_type: sourceTab === 'github' ? 'github' : 'openapi',
+        source,
+        branch: sourceTab === 'github' ? branch : undefined,
+      })
+
+      const scan = await api.scans.create({
+        serviceId: service.id,
+        attackProfile: profile.charAt(0).toUpperCase() + profile.slice(1),
+      })
+
+      navigate(`/app/scans/${scan.id}`)
+    } catch (err) {
+      setLaunchError(err instanceof Error ? err.message : 'Failed to launch scan')
+      setLaunching(false)
+    }
   }
 
   return (
@@ -169,23 +192,6 @@ export function NewScan() {
             </div>
           )}
 
-          {/* Auth */}
-          <div className="space-y-1.5 pt-2 border-t border-border">
-            <Label htmlFor="token" className="flex items-center gap-1.5">
-              Auth token
-              <span className="text-[10px] text-muted-foreground font-normal">(optional)</span>
-            </Label>
-            <Input
-              id="token"
-              type="password"
-              value={bearerToken}
-              onChange={e => setBearerToken(e.target.value)}
-              placeholder="Bearer eyJhbGci..."
-              className="bg-card border-border font-mono text-sm"
-            />
-            <p className="text-xs text-muted-foreground">Used for authenticated endpoint scanning. Stored encrypted, deleted after scan.</p>
-          </div>
-
           {/* Env vars hint */}
           <div className="bg-card border border-border rounded-lg px-4 py-3 flex items-start gap-3">
             <svg className="w-4 h-4 text-primary mt-0.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -293,12 +299,6 @@ export function NewScan() {
                   <span className="text-muted-foreground">Branch</span>
                   <span className="text-foreground font-mono">{branch}</span>
                 </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">Auth token</span>
-                  <span className={bearerToken ? 'text-primary' : 'text-muted-foreground/50'}>
-                    {bearerToken ? 'Provided ✓' : 'None (unauthenticated)'}
-                  </span>
-                </div>
               </div>
             </div>
             <div className="px-5 py-4">
@@ -338,6 +338,12 @@ export function NewScan() {
               </div>
             </div>
           </div>
+
+          {launchError && (
+            <p className="text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-lg px-3 py-2">
+              {launchError}
+            </p>
+          )}
 
           <Button
             className="w-full bg-primary text-primary-foreground hover:bg-primary/90 glow-green h-11 font-semibold"

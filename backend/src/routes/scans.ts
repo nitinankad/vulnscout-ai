@@ -5,6 +5,7 @@ import { db } from '../db';
 import { scans, findings, services } from '../db/schema';
 import { scanQueue } from '../queues';
 import { requireAuth } from '../middleware/requireAuth';
+import { redisClient } from '../queues/redis';
 
 const router = Router();
 router.use(requireAuth);
@@ -52,8 +53,8 @@ router.post('/', async (req, res) => {
   res.status(201).json(scan);
 });
 
-// GET /scans/:id
-router.get('/:id', async (req, res) => {
+// POST /scans/:id/cancel
+router.post('/:id/cancel', async (req, res) => {
   const [scan] = await db
     .select()
     .from(scans)
@@ -65,13 +66,45 @@ router.get('/:id', async (req, res) => {
     return;
   }
 
+  if (scan.status !== 'running' && scan.status !== 'queued') {
+    res.status(400).json({ error: 'Scan is not running or queued' });
+    return;
+  }
+
+  await redisClient.set(`scan:${scan.id}:cancel`, '1', 'EX', 3600);
+
+  res.json({ ok: true });
+});
+
+// GET /scans/:id
+router.get('/:id', async (req, res) => {
+  const rows = await db
+    .select()
+    .from(scans)
+    .leftJoin(services, eq(services.id, scans.serviceId))
+    .where(and(eq(scans.id, req.params.id), eq(scans.userId, req.user!.userId)))
+    .limit(1);
+
+  if (!rows[0]) {
+    res.status(404).json({ error: 'Scan not found' });
+    return;
+  }
+
+  const { scans: scan, services: service } = rows[0];
+
   const scanFindings = await db
     .select()
     .from(findings)
     .where(eq(findings.scanId, scan.id))
     .orderBy(findings.createdAt);
 
-  res.json({ ...scan, findings: scanFindings });
+  res.json({
+    ...scan,
+    serviceName: service?.name ?? null,
+    serviceSource: service?.source ?? null,
+    branch: service?.branch ?? null,
+    findings: scanFindings,
+  });
 });
 
 // GET /scans

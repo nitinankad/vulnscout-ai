@@ -44,6 +44,15 @@ export async function startSandbox(options: SandboxOptions): Promise<SandboxCont
   const networkName = `sandbox-${scanId}`;
   const depContainerIds: string[] = [];
 
+  // 0. Verify Docker is reachable
+  try {
+    await docker.ping();
+  } catch {
+    throw new Error(
+      'Docker is not available. Please start Docker Desktop and retry the scan.',
+    );
+  }
+
   // 1. Isolated bridge network
   await emitEvent(scanId, 'info', `Creating sandbox network: ${networkName}`);
   const network = await docker.createNetwork({
@@ -97,20 +106,28 @@ export async function startSandbox(options: SandboxOptions): Promise<SandboxCont
   await target.start();
   await emitEvent(scanId, 'success', 'Target container started');
 
-  // 4. Health check
-  const targetBaseUrl = `http://localhost:${hostPort}`;
-  await pollHealth(scanId, targetBaseUrl, healthPath);
-
-  return {
+  // Build the context now so we can always clean up, even if health check fails
+  const ctx: SandboxContext = {
     networkId: network.id,
     networkName,
     targetContainerId: target.id,
-    targetBaseUrl,
+    targetBaseUrl: `http://127.0.0.1:${hostPort}`,
     depContainerIds,
     imageTag,
     port,
     hostPort,
   };
+
+  // 4. Health check — tear down on failure so nothing leaks
+  try {
+    await pollHealth(scanId, ctx.targetBaseUrl, healthPath);
+  } catch (err) {
+    await emitEvent(scanId, 'error', 'Health check failed — tearing down sandbox…');
+    await teardownSandbox(ctx, scanId);
+    throw err;
+  }
+
+  return ctx;
 }
 
 /**
@@ -197,12 +214,11 @@ async function pollHealth(scanId: string, baseUrl: string, healthPath: string): 
   while (Date.now() < deadline) {
     try {
       const res = await fetch(url, { signal: AbortSignal.timeout(3000) });
-      if (res.ok) {
-        await emitEvent(scanId, 'success', `Service healthy (HTTP ${res.status})`);
-        return;
-      }
-    } catch {
-      // Not up yet — wait and retry
+      // Any HTTP response means the service is up (404 is fine — no /health route required)
+      await emitEvent(scanId, 'success', `Service healthy (HTTP ${res.status})`);
+      return;
+    } catch (err) {
+      // Network error — service not ready yet, retry
     }
     await new Promise((r) => setTimeout(r, HEALTH_CHECK_INTERVAL_MS));
   }

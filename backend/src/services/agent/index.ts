@@ -6,6 +6,7 @@ import { emitEvent } from '../../lib/events';
 import { AGENT_TOOLS, type HttpRequestInput, type SetAuthInput, type RecordFindingInput } from './tools';
 import { buildSystemPrompt, buildInitialMessage } from './prompt';
 import type { AgentEndpoint } from '../static-analysis';
+import { redisClient } from '../../queues/redis';
 
 const WALL_CLOCK_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
 const MAX_TOKENS_PER_TURN = 4096;
@@ -52,6 +53,13 @@ export async function runAgent(options: AgentRunOptions): Promise<AgentRunResult
     if (Date.now() > state.deadline) {
       await emitEvent(scanId, 'info', 'Agent timeout reached — stopping');
       stoppedReason = 'timeout';
+      break;
+    }
+
+    const cancelled = await redisClient.get(`scan:${scanId}:cancel`);
+    if (cancelled) {
+      await emitEvent(scanId, 'info', 'Scan cancelled by user — generating report with current findings…', true);
+      stoppedReason = 'end_turn';
       break;
     }
 

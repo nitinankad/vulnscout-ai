@@ -49,6 +49,13 @@ export function attachSocketIO(httpServer: HttpServer): SocketIOServer {
     });
 
     socket.on('subscribe', async (scanId: string) => {
+      // Reject non-UUID IDs immediately (e.g. mock demo IDs like "scan-002")
+      const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      if (!UUID_RE.test(scanId)) {
+        socket.emit('error', 'Invalid scan ID');
+        return;
+      }
+
       // Verify this scan belongs to the requesting user
       const [scan] = await db
         .select()

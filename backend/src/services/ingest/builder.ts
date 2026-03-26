@@ -20,6 +20,12 @@ export async function buildDockerImage(
   imageTag: string,
   scanId: string,
 ): Promise<void> {
+  try {
+    await docker.ping();
+  } catch {
+    throw new Error('Docker is not available. Please start Docker Desktop and retry the scan.');
+  }
+
   await emitEvent(scanId, 'info', `Building image ${imageTag}…`);
 
   const tarStream = tar.pack(contextDir);

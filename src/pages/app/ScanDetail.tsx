@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Progress } from '@/components/ui/progress'
 import { MOCK_SCANS, MOCK_FINDINGS, type Finding, type Severity } from '@/lib/mock-data'
+import { api, type ScanWithFindings, type BackendFinding } from '@/lib/api'
 import { useAuth } from '@/context/auth'
 import { useScanStream, type ScanEvent } from '@/hooks/useScanStream'
 
@@ -60,6 +61,26 @@ const EVENT_COLOR: Record<string, string> = {
   success: 'text-primary',
   info: 'text-muted-foreground',
   error: 'text-destructive',
+}
+
+// ─── Backend finding mapper ───────────────────────────────────────────────────
+
+function mapFinding(f: BackendFinding): Finding {
+  return {
+    id: f.id,
+    severity: f.severity,
+    vuln_class: f.vulnClass,
+    title: f.title,
+    endpoint: f.endpoint,
+    method: f.method,
+    description: f.description,
+    proof_request: f.proofRequest,
+    proof_response: f.proofResponse,
+    curl_command: f.curlCommand,
+    fix_suggestion: f.fixSuggestion,
+    cwe_id: f.cweId,
+    owasp_category: f.owaspCategory,
+  };
 }
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
@@ -167,11 +188,13 @@ function RunningView({
   phase,
   progress,
   backPath,
+  onCancel,
 }: {
   events: LiveEvent[]
   phase: string
   progress: number
   backPath: string
+  onCancel?: () => void
 }) {
   const logRef = useRef<HTMLDivElement>(null)
   const navigate = useNavigate()
@@ -248,6 +271,17 @@ function RunningView({
           {events.length === 0 && <p className="text-muted-foreground/40">Connecting…</p>}
         </div>
       </div>
+
+      {onCancel && (
+        <div className="mt-4 flex justify-end">
+          <button
+            onClick={onCancel}
+            className="text-xs text-muted-foreground border border-border rounded-lg px-3 py-1.5 hover:text-destructive hover:border-destructive/50 transition-colors"
+          >
+            Cancel scan & generate report
+          </button>
+        </div>
+      )}
     </div>
   )
 }
@@ -261,7 +295,8 @@ export function ScanDetail() {
 
   // ── Determine mode ────────────────────────────────────────────────────────
   const isMockRunning = id === 'scan-running'
-  const isRealScan = !!id && !isMockRunning
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+  const isRealScan = !!id && !isMockRunning && UUID_RE.test(id)
 
   // ── Live events state ─────────────────────────────────────────────────────
   const [events, setEvents] = useState<LiveEvent[]>([])
@@ -272,6 +307,10 @@ export function ScanDetail() {
   // ── Completed view state (must be unconditional) ──────────────────────────
   const [filter, setFilter] = useState<Severity | 'all'>('all')
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  const [scanLogOpen, setScanLogOpen] = useState(false)
+  const [scanData, setScanData] = useState<ScanWithFindings | null>(null)
+  const [scanDataLoading, setScanDataLoading] = useState(isRealScan)
+  const [cancelling, setCancelling] = useState(false)
 
   // ── Real scan streaming ───────────────────────────────────────────────────
   const handleEvent = useCallback((ev: ScanEvent) => {
@@ -295,9 +334,19 @@ export function ScanDetail() {
   }, [])
 
   const handleDone = useCallback(() => {
-    setProgress(100)
-    setTimeout(() => setDone(true), 800)
-  }, [])
+    setProgress(100);
+    if (isRealScan && id) {
+      setTimeout(async () => {
+        try {
+          const data = await api.scans.get(id);
+          setScanData(data);
+        } catch { /* ignore */ }
+        setDone(true);
+      }, 800);
+    } else {
+      setTimeout(() => setDone(true), 800);
+    }
+  }, [isRealScan, id])
 
   useScanStream(isRealScan ? (id ?? null) : null, {
     token,
@@ -305,6 +354,30 @@ export function ScanDetail() {
     onDone: handleDone,
     enabled: isRealScan && !done,
   })
+
+  // ── Initial fetch for real scans ──────────────────────────────────────────
+  useEffect(() => {
+    if (!isRealScan || !id) { setScanDataLoading(false); return; }
+    api.scans.get(id)
+      .then((data) => {
+        setScanData(data);
+        if (data.status === 'completed' || data.status === 'failed') {
+          setDone(true);
+        }
+      })
+      .catch(console.error)
+      .finally(() => setScanDataLoading(false));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // ── Cancel handler ────────────────────────────────────────────────────────
+  const handleCancel = useCallback(async () => {
+    if (!id || cancelling) return;
+    setCancelling(true);
+    try {
+      await api.scans.cancel(id);
+    } catch { /* ignore */ }
+  }, [id, cancelling])
 
   // ── Mock demo simulation ──────────────────────────────────────────────────
   useEffect(() => {
@@ -330,8 +403,47 @@ export function ScanDetail() {
 
   // ── Derived values (no hooks below this line) ─────────────────────────────
   const isRunning = (isMockRunning || isRealScan) && !done
-  const scan = isRealScan ? MOCK_SCANS[0] : (MOCK_SCANS.find((s) => s.id === id) ?? MOCK_SCANS[0])
-  const findings = filter === 'all' ? MOCK_FINDINGS : MOCK_FINDINGS.filter((f) => f.severity === filter)
+  const mockScan = MOCK_SCANS.find((s) => s.id === id) ?? MOCK_SCANS[0]
+  const displayScan = isRealScan && scanData ? {
+    service_name: scanData.serviceName ?? scanData.serviceId,
+    service_source: scanData.serviceSource ?? '',
+    branch: scanData.branch ?? undefined,
+    attack_profile: scanData.attackProfile,
+    endpoints_scanned: scanData.endpointsScanned,
+    requests_fired: scanData.requestsFired,
+    duration: scanData.durationMs ? `${Math.round(scanData.durationMs / 1000)}s` : '—',
+    critical: scanData.critical,
+    high: scanData.high,
+    medium: scanData.medium,
+    low: scanData.low,
+  } : {
+    service_name: mockScan.service_name,
+    service_source: mockScan.service_source,
+    branch: mockScan.branch,
+    attack_profile: mockScan.attack_profile,
+    endpoints_scanned: mockScan.endpoints_scanned,
+    requests_fired: mockScan.requests_fired,
+    duration: mockScan.duration ?? '—',
+    critical: mockScan.critical,
+    high: mockScan.high,
+    medium: mockScan.medium,
+    low: mockScan.low,
+  }
+  const allFindings: Finding[] = isRealScan && scanData
+    ? scanData.findings.map(mapFinding)
+    : MOCK_FINDINGS;
+  const findings = filter === 'all' ? allFindings : allFindings.filter((f) => f.severity === filter)
+
+  if (isRealScan && scanDataLoading) {
+    return (
+      <div className="p-8 flex items-center gap-3 text-muted-foreground text-sm">
+        <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 12a8 8 0 018-8v4l3-3-3-3V4a10 10 0 100 20v-2a8 8 0 01-8-8z" />
+        </svg>
+        Loading scan…
+      </div>
+    );
+  }
 
   return isRunning ? (
     <RunningView
@@ -339,9 +451,11 @@ export function ScanDetail() {
       phase={phase}
       progress={progress}
       backPath="/app"
+      onCancel={handleCancel}
     />
   ) : (
     <div className="p-8 max-w-4xl">
+
       <button
         className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors mb-6"
         onClick={() => navigate('/app')}
@@ -355,8 +469,8 @@ export function ScanDetail() {
       {/* Header */}
       <div className="flex items-start justify-between mb-6">
         <div>
-          <h1 className="text-xl font-bold text-foreground mb-1">{scan.service_name}</h1>
-          <p className="text-sm text-muted-foreground">{scan.service_source}{scan.branch ? ` · ${scan.branch}` : ''}</p>
+          <h1 className="text-xl font-bold text-foreground mb-1">{displayScan.service_name}</h1>
+          <p className="text-sm text-muted-foreground">{displayScan.service_source}{displayScan.branch ? ` · ${displayScan.branch}` : ''}</p>
         </div>
         <div className="flex items-center gap-2">
           <Button variant="outline" size="sm" className="h-8 text-xs border-border">
@@ -371,10 +485,10 @@ export function ScanDetail() {
       {/* Stats */}
       <div className="grid grid-cols-4 gap-3 mb-6">
         {[
-          { label: 'Critical', count: scan.critical, cls: 'text-destructive bg-destructive/10 border-destructive/20' },
-          { label: 'High', count: scan.high, cls: 'text-orange-400 bg-orange-400/10 border-orange-400/20' },
-          { label: 'Medium', count: scan.medium, cls: 'text-yellow-400 bg-yellow-400/10 border-yellow-400/20' },
-          { label: 'Low', count: scan.low, cls: 'text-blue-400 bg-blue-400/10 border-blue-400/20' },
+          { label: 'Critical', count: displayScan.critical, cls: 'text-destructive bg-destructive/10 border-destructive/20' },
+          { label: 'High', count: displayScan.high, cls: 'text-orange-400 bg-orange-400/10 border-orange-400/20' },
+          { label: 'Medium', count: displayScan.medium, cls: 'text-yellow-400 bg-yellow-400/10 border-yellow-400/20' },
+          { label: 'Low', count: displayScan.low, cls: 'text-blue-400 bg-blue-400/10 border-blue-400/20' },
         ].map((s) => (
           <div key={s.label} className={`rounded-xl border p-4 text-center ${s.cls}`}>
             <p className="text-2xl font-bold">{s.count}</p>
@@ -385,10 +499,10 @@ export function ScanDetail() {
 
       {/* Meta */}
       <div className="flex items-center gap-6 text-xs text-muted-foreground mb-6 pb-6 border-b border-border">
-        <span>Profile: <span className="text-foreground">{scan.attack_profile}</span></span>
-        <span>Endpoints: <span className="text-foreground">{scan.endpoints_scanned}</span></span>
-        <span>Requests fired: <span className="text-foreground">{scan.requests_fired.toLocaleString()}</span></span>
-        <span>Duration: <span className="text-foreground">{scan.duration}</span></span>
+        <span>Profile: <span className="text-foreground">{displayScan.attack_profile}</span></span>
+        <span>Endpoints: <span className="text-foreground">{displayScan.endpoints_scanned}</span></span>
+        <span>Requests fired: <span className="text-foreground">{displayScan.requests_fired.toLocaleString()}</span></span>
+        <span>Duration: <span className="text-foreground">{displayScan.duration}</span></span>
         <span className="ml-auto text-primary">Scan complete</span>
       </div>
 
@@ -404,7 +518,7 @@ export function ScanDetail() {
                 : 'text-muted-foreground hover:text-foreground border border-transparent'
             }`}
           >
-            {f === 'all' ? `All (${MOCK_FINDINGS.length})` : f}
+            {f === 'all' ? `All (${allFindings.length})` : f}
           </button>
         ))}
         <div className="ml-auto flex items-center gap-2">
@@ -439,6 +553,43 @@ export function ScanDetail() {
           />
         ))}
       </div>
+
+      {/* Scan execution log */}
+      {events.length > 0 && (
+        <div className="mt-6 bg-[oklch(0.07_0.01_200)] border border-border rounded-xl overflow-hidden">
+          <button
+            className="w-full flex items-center justify-between px-4 py-3 hover:bg-white/[0.02] transition-colors"
+            onClick={() => setScanLogOpen((v) => !v)}
+          >
+            <div className="flex items-center gap-2">
+              <svg className="w-3.5 h-3.5 text-muted-foreground" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+              <span className="text-xs font-medium text-muted-foreground">Scan execution log</span>
+              <span className="text-[10px] text-muted-foreground/50 bg-muted/20 border border-border px-1.5 py-0.5 rounded">{events.length} events</span>
+            </div>
+            <svg
+              className={`w-4 h-4 text-muted-foreground transition-transform ${scanLogOpen ? 'rotate-180' : ''}`}
+              fill="none" viewBox="0 0 24 24" stroke="currentColor"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+            </svg>
+          </button>
+
+          {scanLogOpen && (
+            <div className="border-t border-border p-4 space-y-1.5 font-mono text-xs max-h-72 overflow-y-auto">
+              {events.map((ev, i) => (
+                <div key={i} className="flex items-start gap-2">
+                  <span className="text-muted-foreground/40 flex-shrink-0 select-none">
+                    {new Date(ev.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                  </span>
+                  <span className={EVENT_COLOR[ev.type] ?? 'text-muted-foreground'}>{ev.text}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }
