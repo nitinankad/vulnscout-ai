@@ -62,6 +62,7 @@ export function startWorker() {
           imageTag: ingestResult.imageTag,
           port: ingestResult.port,
           repoDir: ingestResult.repoDir,
+          envVars: service.envVars ?? {},
         });
         await emitEvent(scanId, 'success', `Sandbox ready · ${sandbox.targetBaseUrl}`);
 

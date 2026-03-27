@@ -13,6 +13,7 @@ const createSchema = z.object({
   source_type: z.enum(['github', 'openapi']),
   source: z.string().min(1),
   branch: z.string().optional(),
+  env_vars: z.record(z.string(), z.string()).optional(),
 });
 
 // GET /services
@@ -33,11 +34,11 @@ router.post('/', async (req, res) => {
     res.status(400).json({ error: parsed.error.flatten() });
     return;
   }
-  const { name, source_type, source, branch } = parsed.data;
+  const { name, source_type, source, branch, env_vars } = parsed.data;
 
   const [service] = await db
     .insert(services)
-    .values({ userId: req.user!.userId, name, sourceType: source_type, source, branch })
+    .values({ userId: req.user!.userId, name, sourceType: source_type, source, branch, envVars: (env_vars ?? {}) as Record<string, string> })
     .returning();
 
   res.status(201).json(service);

@@ -32,6 +32,7 @@ export const services = pgTable('services', {
   sourceType: sourceTypeEnum('source_type').notNull(),
   source: text('source').notNull(),
   branch: text('branch'),
+  envVars: jsonb('env_vars').$type<Record<string, string>>().default({}).notNull(),
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 

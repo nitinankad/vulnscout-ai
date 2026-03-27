@@ -43,6 +43,7 @@ const PROFILES = [
 ]
 
 type SourceTab = 'github' | 'openapi'
+type EnvVar = { key: string; value: string; id: number }
 
 export function NewScan() {
   const navigate = useNavigate()
@@ -52,8 +53,52 @@ export function NewScan() {
   const [attacks, setAttacks] = useState(ATTACK_CLASSES)
   const [repoUrl, setRepoUrl] = useState('')
   const [branch, setBranch] = useState('main')
+  const [envVars, setEnvVars] = useState<EnvVar[]>([])
+  const [envExpanded, setEnvExpanded] = useState(false)
+  const [bulkMode, setBulkMode] = useState(false)
+  const [bulkText, setBulkText] = useState('')
   const [launching, setLaunching] = useState(false)
   const [launchError, setLaunchError] = useState<string | null>(null)
+  const nextEnvId = envVars.length > 0 ? Math.max(...envVars.map(e => e.id)) + 1 : 0
+
+  function addEnvVar() {
+    setEnvVars(v => [...v, { key: '', value: '', id: nextEnvId }])
+    setEnvExpanded(true)
+  }
+
+  function updateEnvVar(id: number, field: 'key' | 'value', val: string) {
+    setEnvVars(v => v.map(e => e.id === id ? { ...e, [field]: val } : e))
+  }
+
+  function removeEnvVar(id: number) {
+    setEnvVars(v => v.filter(e => e.id !== id))
+  }
+
+  function applyBulk() {
+    let id = nextEnvId
+    const parsed: EnvVar[] = []
+    for (const line of bulkText.split('\n')) {
+      const trimmed = line.trim()
+      if (!trimmed || trimmed.startsWith('#')) continue
+      const eq = trimmed.indexOf('=')
+      if (eq === -1) continue
+      const key = trimmed.slice(0, eq).trim()
+      const value = trimmed.slice(eq + 1).trim().replace(/^["']|["']$/g, '')
+      if (key) parsed.push({ key, value, id: id++ })
+    }
+    setEnvVars(v => {
+      const existing = v.filter(e => e.key.trim())
+      const newKeys = new Set(parsed.map(p => p.key))
+      return [...existing.filter(e => !newKeys.has(e.key)), ...parsed]
+    })
+    setBulkText('')
+    setBulkMode(false)
+    setEnvExpanded(true)
+  }
+
+  function envVarsToRecord(): Record<string, string> {
+    return Object.fromEntries(envVars.filter(e => e.key.trim()).map(e => [e.key.trim(), e.value]))
+  }
 
   function toggleAttack(id: string) {
     setAttacks(a => a.map(x => x.id === id ? { ...x, on: !x.on } : x))
@@ -67,11 +112,13 @@ export function NewScan() {
       const source = repoUrl.startsWith('http') ? repoUrl : `https://${repoUrl}`
       const name = repoUrl.split('/').slice(-2).join('/') || repoUrl
 
+      const envRecord = envVarsToRecord()
       const service = await api.services.create({
         name,
         source_type: sourceTab === 'github' ? 'github' : 'openapi',
         source,
         branch: sourceTab === 'github' ? branch : undefined,
+        env_vars: Object.keys(envRecord).length > 0 ? envRecord : undefined,
       })
 
       const scan = await api.scans.create({
@@ -192,14 +239,119 @@ export function NewScan() {
             </div>
           )}
 
-          {/* Env vars hint */}
-          <div className="bg-card border border-border rounded-lg px-4 py-3 flex items-start gap-3">
-            <svg className="w-4 h-4 text-primary mt-0.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-            <p className="text-xs text-muted-foreground leading-relaxed">
-              Environment variables are inferred from your repo. You'll be able to review and override them before launch.
-            </p>
+          {/* Env vars */}
+          <div className="border border-border rounded-lg overflow-hidden">
+            <div className="flex items-center justify-between px-4 py-3 bg-card">
+              <button
+                type="button"
+                onClick={() => setEnvExpanded(e => !e)}
+                className="flex items-center gap-2 hover:opacity-80 transition-opacity"
+              >
+                <svg className="w-4 h-4 text-muted-foreground" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
+                </svg>
+                <span className="text-sm font-medium text-foreground">Environment variables</span>
+                {envVars.filter(e => e.key.trim()).length > 0 && (
+                  <span className="text-xs bg-primary/15 text-primary px-1.5 py-0.5 rounded font-medium">
+                    {envVars.filter(e => e.key.trim()).length}
+                  </span>
+                )}
+              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => { setBulkMode(b => !b); setEnvExpanded(true) }}
+                  className={`text-xs px-2 py-1 rounded border transition-colors ${bulkMode ? 'border-primary/60 text-primary bg-primary/5' : 'border-border text-muted-foreground hover:text-foreground hover:border-border/80'}`}
+                >
+                  Paste .env
+                </button>
+                <button type="button" onClick={() => setEnvExpanded(e => !e)} className="text-muted-foreground hover:text-foreground transition-colors">
+                  <svg className={`w-4 h-4 transition-transform ${envExpanded ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+
+            {envExpanded && (
+              <div className="border-t border-border bg-card/50 px-4 py-3 space-y-2">
+                <p className="text-xs text-muted-foreground mb-3">
+                  Variables injected into the sandbox at runtime (e.g. <code className="bg-muted px-1 rounded">DATABASE_URL</code>, <code className="bg-muted px-1 rounded">JWT_SECRET</code>).
+                </p>
+
+                {bulkMode && (
+                  <div className="space-y-2 mb-3">
+                    <textarea
+                      autoFocus
+                      value={bulkText}
+                      onChange={e => setBulkText(e.target.value)}
+                      placeholder={"DATABASE_URL=postgres://...\nJWT_SECRET=abc123\nREDIS_URL=redis://..."}
+                      className="w-full h-32 bg-card border border-border rounded-md px-3 py-2 font-mono text-xs text-foreground placeholder:text-muted-foreground/50 resize-none focus:outline-none focus:ring-1 focus:ring-primary/50"
+                    />
+                    <div className="flex gap-2">
+                      <Button type="button" onClick={applyBulk} className="h-7 text-xs px-3 bg-primary text-primary-foreground hover:bg-primary/90">
+                        Import
+                      </Button>
+                      <button type="button" onClick={() => { setBulkMode(false); setBulkText('') }} className="h-7 text-xs px-3 text-muted-foreground hover:text-foreground transition-colors">
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {envVars.map((ev) => (
+                  <div key={ev.id} className="flex items-center gap-2">
+                    <Input
+                      value={ev.key}
+                      onChange={e => updateEnvVar(ev.id, 'key', e.target.value)}
+                      placeholder="KEY"
+                      className="bg-card border-border font-mono text-xs h-8 w-36 flex-shrink-0"
+                    />
+                    <span className="text-muted-foreground text-sm">=</span>
+                    <Input
+                      value={ev.value}
+                      onChange={e => updateEnvVar(ev.id, 'value', e.target.value)}
+                      placeholder="value"
+                      className="bg-card border-border font-mono text-xs h-8 flex-1"
+                      type={ev.key.toLowerCase().includes('secret') || ev.key.toLowerCase().includes('password') || ev.key.toLowerCase().includes('token') ? 'password' : 'text'}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => removeEnvVar(ev.id)}
+                      className="text-muted-foreground hover:text-destructive transition-colors flex-shrink-0"
+                    >
+                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  </div>
+                ))}
+
+                <button
+                  type="button"
+                  onClick={addEnvVar}
+                  className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors mt-1"
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                  </svg>
+                  Add variable
+                </button>
+              </div>
+            )}
+
+            {!envExpanded && (
+              <button
+                type="button"
+                onClick={addEnvVar}
+                className="w-full flex items-center gap-1.5 px-4 py-2 border-t border-border bg-card/30 text-xs text-muted-foreground hover:text-foreground hover:bg-muted/20 transition-colors"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                </svg>
+                Add variable
+              </button>
+            )}
           </div>
 
           <Button
@@ -299,6 +451,18 @@ export function NewScan() {
                   <span className="text-muted-foreground">Branch</span>
                   <span className="text-foreground font-mono">{branch}</span>
                 </div>
+                {envVars.filter(e => e.key.trim()).length > 0 && (
+                  <div className="flex justify-between text-sm items-start">
+                    <span className="text-muted-foreground">Env vars</span>
+                    <div className="flex flex-wrap gap-1 justify-end max-w-xs">
+                      {envVars.filter(e => e.key.trim()).map(e => (
+                        <span key={e.id} className="font-mono text-xs bg-muted px-1.5 py-0.5 rounded text-foreground">
+                          {e.key}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
             <div className="px-5 py-4">

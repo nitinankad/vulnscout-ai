@@ -35,6 +35,7 @@ export interface Service {
   sourceType: 'github' | 'openapi'
   source: string
   branch: string | null
+  envVars: Record<string, string>
   createdAt: string
 }
 
@@ -111,7 +112,7 @@ export const api = {
   services: {
     list: () => request<Service[]>('/services'),
 
-    create: (data: { name: string; source_type: 'github' | 'openapi'; source: string; branch?: string }) =>
+    create: (data: { name: string; source_type: 'github' | 'openapi'; source: string; branch?: string; env_vars?: Record<string, string> }) =>
       request<Service>('/services', { method: 'POST', body: JSON.stringify(data) }),
 
     delete: (id: string) =>
