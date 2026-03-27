@@ -95,7 +95,12 @@ export function startWorker() {
         await emitEvent(scanId, 'success', `Scan complete · ${Math.round(durationMs / 1000)}s`, true);
         console.log(`[worker] scan ${scanId} completed · ${agentResult.findingsCount} findings`);
       } finally {
-        if (sandbox) await teardownSandbox(sandbox, scanId);
+        if (sandbox) {
+          const containerLogs = await teardownSandbox(sandbox, scanId);
+          if (containerLogs) {
+            await db.update(scans).set({ containerLogs }).where(eq(scans.id, scanId));
+          }
+        }
       }
     },
     { connection: bullMQConnection, concurrency: 3 },

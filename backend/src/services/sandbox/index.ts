@@ -28,6 +28,10 @@ export interface SandboxContext {
   imageTag: string;
   port: number;
   hostPort: number;
+  /** Accumulated container stdout/stderr lines (populated during teardown) */
+  containerLogLines: string[];
+  /** Call to stop the live log stream before teardown */
+  stopLogStream: () => void;
 }
 
 // ─── Public API ───────────────────────────────────────────────────────────────
@@ -108,6 +112,7 @@ export async function startSandbox(options: SandboxOptions): Promise<SandboxCont
   await emitEvent(scanId, 'success', 'Target container started');
 
   // Build the context now so we can always clean up, even if health check fails
+  const containerLogLines: string[] = [];
   const ctx: SandboxContext = {
     networkId: network.id,
     networkName,
@@ -117,6 +122,8 @@ export async function startSandbox(options: SandboxOptions): Promise<SandboxCont
     imageTag,
     port,
     hostPort,
+    containerLogLines,
+    stopLogStream: () => {},
   };
 
   // 4. Health check — tear down on failure so nothing leaks
@@ -128,6 +135,9 @@ export async function startSandbox(options: SandboxOptions): Promise<SandboxCont
     throw err;
   }
 
+  // 5. Attach live log stream — emit each line as a scan event and collect for the report
+  ctx.stopLogStream = await streamContainerLogs(target.id, containerLogLines);
+
   return ctx;
 }
 
@@ -135,7 +145,8 @@ export async function startSandbox(options: SandboxOptions): Promise<SandboxCont
  * Stops and removes all containers and the network for a given sandbox.
  * Safe to call even if containers are already gone.
  */
-export async function teardownSandbox(context: SandboxContext, scanId: string): Promise<void> {
+export async function teardownSandbox(context: SandboxContext, scanId: string): Promise<string> {
+  context.stopLogStream();
   await emitEvent(scanId, 'info', 'Tearing down sandbox…');
 
   const allIds = [context.targetContainerId, ...context.depContainerIds];
@@ -157,6 +168,7 @@ export async function teardownSandbox(context: SandboxContext, scanId: string): 
   }
 
   await emitEvent(scanId, 'success', 'Sandbox torn down · all containers removed');
+  return context.containerLogLines.join('');
 }
 
 // ─── Internals ────────────────────────────────────────────────────────────────
@@ -205,6 +217,59 @@ async function pullImageIfMissing(image: string): Promise<void> {
       });
     });
   });
+}
+
+/**
+ * Attaches to a container's stdout/stderr with follow=true.
+ * Each line is emitted as a scan event AND pushed to `lines` for later storage.
+ * Returns a stop function that destroys the stream.
+ */
+async function streamContainerLogs(
+  containerId: string,
+  lines: string[],
+): Promise<() => void> {
+  let stopped = false;
+  try {
+    const container = docker.getContainer(containerId);
+    const stream = await container.logs({
+      follow: true,
+      stdout: true,
+      stderr: true,
+      timestamps: true,
+    }) as unknown as NodeJS.ReadableStream;
+
+    let buf = '';
+    stream.on('data', (chunk: Buffer) => {
+      if (stopped) return;
+      // Docker multiplexed stream: 8-byte header per frame (byte 0 = stream type, bytes 4-7 = size)
+      let offset = 0;
+      while (offset < chunk.length) {
+        if (offset + 8 > chunk.length) break;
+        const size = chunk.readUInt32BE(offset + 4);
+        offset += 8;
+        if (offset + size > chunk.length) break;
+        buf += chunk.slice(offset, offset + size).toString('utf8');
+        offset += size;
+      }
+      // Flush complete lines
+      const lineArr = buf.split('\n');
+      buf = lineArr.pop() ?? '';
+      for (const line of lineArr) {
+        if (!line.trim()) continue;
+        lines.push(line + '\n');
+      }
+    });
+
+    stream.on('error', () => {});
+    stream.on('end', () => { if (buf.trim()) lines.push(buf + '\n'); });
+
+    return () => {
+      stopped = true;
+      try { (stream as NodeJS.ReadableStream & { destroy?: () => void }).destroy?.(); } catch {}
+    };
+  } catch {
+    return () => {};
+  }
 }
 
 async function pruneLeftovers(scanId: string, networkName: string): Promise<void> {

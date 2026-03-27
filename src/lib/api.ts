@@ -97,6 +97,7 @@ export type ScanWithFindings = Scan & {
   serviceName: string | null;
   serviceSource: string | null;
   branch: string | null;
+  containerLogs: string | null;
 };
 
 // ─── API calls ────────────────────────────────────────────────────────────────

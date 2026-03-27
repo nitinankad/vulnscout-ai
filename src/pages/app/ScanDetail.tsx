@@ -439,6 +439,7 @@ export function ScanDetail() {
   const [filter, setFilter] = useState<Severity | 'all'>('all')
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [scanLogOpen, setScanLogOpen] = useState(false)
+  const [containerLogOpen, setContainerLogOpen] = useState(false)
   const [auditLogOpen, setAuditLogOpen] = useState(false)
   const [auditRequests, setAuditRequests] = useState<ScanRequest[] | null>(null)
   const [auditLoading, setAuditLoading] = useState(false)
@@ -817,6 +818,38 @@ export function ScanDetail() {
                   })}
                 </div>
               )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Container output */}
+      {isRealScan && scanData?.containerLogs && (
+        <div className="mt-4 bg-[oklch(0.07_0.01_200)] border border-border rounded-xl overflow-hidden">
+          <button
+            className="w-full flex items-center justify-between px-4 py-3 hover:bg-white/[0.02] transition-colors"
+            onClick={() => setContainerLogOpen(v => !v)}
+          >
+            <div className="flex items-center gap-2">
+              <svg className="w-3.5 h-3.5 text-muted-foreground" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+              </svg>
+              <span className="text-xs font-medium text-muted-foreground">Container output</span>
+              <span className="text-[10px] text-muted-foreground/50 bg-muted/20 border border-border px-1.5 py-0.5 rounded">
+                {scanData.containerLogs.split('\n').filter(Boolean).length} lines
+              </span>
+            </div>
+            <svg
+              className={`w-4 h-4 text-muted-foreground transition-transform ${containerLogOpen ? 'rotate-180' : ''}`}
+              fill="none" viewBox="0 0 24 24" stroke="currentColor"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+            </svg>
+          </button>
+
+          {containerLogOpen && (
+            <div className="border-t border-border p-4 font-mono text-[11px] text-muted-foreground max-h-96 overflow-y-auto leading-relaxed whitespace-pre-wrap bg-[oklch(0.05_0.008_200)]">
+              {scanData.containerLogs}
             </div>
           )}
         </div>

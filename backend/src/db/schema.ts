@@ -53,6 +53,7 @@ export const scans = pgTable('scans', {
   requestsFired: integer('requests_fired').default(0).notNull(),
   durationMs: integer('duration_ms'),
   errorMessage: text('error_message'),
+  containerLogs: text('container_logs'),
 });
 
 export const scanRequests = pgTable('scan_requests', {
