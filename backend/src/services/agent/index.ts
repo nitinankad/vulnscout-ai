@@ -64,7 +64,7 @@ export async function runAgent(options: AgentRunOptions): Promise<AgentRunResult
     }
 
     const response = await client.messages.create({
-      model: 'claude-opus-4-6',
+      model: 'claude-haiku-4-5-20251001',
       max_tokens: MAX_TOKENS_PER_TURN,
       system: systemPrompt,
       tools: AGENT_TOOLS,

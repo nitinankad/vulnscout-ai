@@ -44,7 +44,7 @@ router.post('/', async (req, res) => {
 
   // Enqueue job
   await scanQueue.add(
-    'run-scan' as string,
+    'run-scan',
     { scanId: scan.id, serviceId: service_id, userId: req.user!.userId, attackProfile: attack_profile },
     { jobId: scan.id },
   );

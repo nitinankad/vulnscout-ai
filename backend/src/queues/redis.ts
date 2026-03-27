@@ -1,11 +1,15 @@
 import IORedis from 'ioredis';
 
-// Used for pub/sub (Phase 6 — real-time streaming)
+// Used for pub/sub event emission
 export const redisClient = new IORedis(process.env.REDIS_URL ?? 'redis://localhost:6379', {
   maxRetriesPerRequest: null,
 });
+redisClient.on('error', (err: Error) => {
+  console.warn('[redis:pub]', err.message);
+});
 
-// Plain connection options for BullMQ (avoids ioredis version conflicts)
+// Plain connection options for BullMQ — BullMQ bundles its own ioredis internally
+// and cannot accept an external IORedis instance due to version conflicts.
 const redisUrl = new URL(process.env.REDIS_URL ?? 'redis://localhost:6379');
 export const bullMQConnection = {
   host: redisUrl.hostname,

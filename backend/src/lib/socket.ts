@@ -48,6 +48,11 @@ export function attachSocketIO(httpServer: HttpServer): SocketIOServer {
       maxRetriesPerRequest: null,
     });
 
+    // Must handle 'error' or Node.js will crash on connection-closed events
+    sub.on('error', (err: Error) => {
+      console.warn('[socket.io] subscriber error:', err.message);
+    });
+
     socket.on('subscribe', async (scanId: string) => {
       // Reject non-UUID IDs immediately (e.g. mock demo IDs like "scan-002")
       const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -99,7 +104,7 @@ export function attachSocketIO(httpServer: HttpServer): SocketIOServer {
     });
 
     socket.on('disconnect', () => {
-      sub.disconnect();
+      sub.disconnect(false);
     });
   });
 

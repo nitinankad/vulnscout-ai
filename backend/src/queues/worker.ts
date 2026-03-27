@@ -7,7 +7,7 @@ import { emitEvent } from '../lib/events';
 import { decrypt } from '../lib/crypto';
 import { ingestRepo } from '../services/ingest';
 import { startSandbox, teardownSandbox, type SandboxContext } from '../services/sandbox';
-import { runAgent } from '../services/agent';
+import { runAttacker } from '../services/attacker';
 import { analyseRepo, formatEndpointsForAgent } from '../services/static-analysis';
 import type { ScanJobData } from './index';
 
@@ -65,9 +65,9 @@ export function startWorker() {
         });
         await emitEvent(scanId, 'success', `Sandbox ready · ${sandbox.targetBaseUrl}`);
 
-        // ── Phase 4: AI Agent ────────────────────────────────────────────────
-        await emitEvent(scanId, 'info', '── Phase 4: AI Agent');
-        const agentResult = await runAgent({
+        // ── Phase 4: AI Attacker ─────────────────────────────────────────────
+        await emitEvent(scanId, 'info', '── Phase 4: AI Attacker');
+        const agentResult = await runAttacker({
           scanId,
           targetBaseUrl: sandbox.targetBaseUrl,
           attackProfile: attackProfile as 'Quick' | 'Standard' | 'Aggressive',
@@ -77,7 +77,7 @@ export function startWorker() {
         await emitEvent(
           scanId,
           'success',
-          `Agent done · ${agentResult.findingsCount} findings · ${agentResult.requestsFired} requests`,
+          `Attacker done · ${agentResult.findingsCount} findings · ${agentResult.requestsFired} requests`,
         );
 
         const durationMs = Date.now() - startedAt;

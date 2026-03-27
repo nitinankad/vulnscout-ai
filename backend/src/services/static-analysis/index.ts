@@ -1,6 +1,6 @@
 import { emitEvent } from '../../lib/events';
 import { findAndParseOpenApi } from './openapi';
-import { walkSourceFiles, extractRoutesFromFile, annotateUnprotectedWrites } from './routes';
+import { walkSourceFiles, extractRoutesFromFile, buildFilePrefixMap, annotateUnprotectedWrites } from './routes';
 import type { StaticAnalysisResult, Endpoint } from './types';
 
 export type { StaticAnalysisResult, Endpoint };
@@ -42,11 +42,20 @@ export async function analyseRepo(repoDir: string, scanId: string): Promise<Stat
   const files = await walkSourceFiles(repoDir);
   await emitEvent(scanId, 'info', `Static analysis: found ${files.length} source files`);
 
+  const prefixMap = await buildFilePrefixMap(files);
+  if (prefixMap.size > 0) {
+    const entries = [...prefixMap.entries()].map(([f, p]) => `  ${p} → ${f}`).join('\n');
+    await emitEvent(scanId, 'info', `Router prefixes detected:\n${entries}`);
+  } else {
+    await emitEvent(scanId, 'info', 'No router mount prefixes detected');
+  }
+
   const allEndpoints: Endpoint[] = [];
   let analysedFiles = 0;
 
   for (const file of files) {
-    const endpoints = await extractRoutesFromFile(file);
+    const prefix = prefixMap.get(file) ?? '';
+    const endpoints = await extractRoutesFromFile(file, prefix);
     if (endpoints.length > 0) {
       allEndpoints.push(...endpoints);
       analysedFiles++;

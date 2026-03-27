@@ -53,7 +53,8 @@ export async function startSandbox(options: SandboxOptions): Promise<SandboxCont
     );
   }
 
-  // 1. Isolated bridge network
+  // 1. Isolated bridge network — remove any leftover from a previous failed run first
+  await pruneLeftovers(scanId, networkName);
   await emitEvent(scanId, 'info', `Creating sandbox network: ${networkName}`);
   const network = await docker.createNetwork({
     Name: networkName,
@@ -204,6 +205,43 @@ async function pullImageIfMissing(image: string): Promise<void> {
       });
     });
   });
+}
+
+async function pruneLeftovers(scanId: string, networkName: string): Promise<void> {
+  // Remove any containers tagged with this scan ID (from a previous failed run)
+  try {
+    const containers = await docker.listContainers({
+      all: true,
+      filters: JSON.stringify({ label: [`vulnscout.scan_id=${scanId}`] }),
+    });
+    for (const info of containers) {
+      try {
+        await docker.getContainer(info.Id).remove({ force: true });
+      } catch {
+        // already gone
+      }
+    }
+  } catch {
+    // ignore listing errors
+  }
+
+  // Remove the network if it exists
+  try {
+    const networks = await docker.listNetworks({
+      filters: JSON.stringify({ name: [networkName] }),
+    });
+    for (const info of networks) {
+      if (info.Name === networkName) {
+        try {
+          await docker.getNetwork(info.Id).remove();
+        } catch {
+          // already gone or still has endpoints — force remove via containers above
+        }
+      }
+    }
+  } catch {
+    // ignore
+  }
 }
 
 async function pollHealth(scanId: string, baseUrl: string, healthPath: string): Promise<void> {

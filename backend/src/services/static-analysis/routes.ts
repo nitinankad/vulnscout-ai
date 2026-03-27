@@ -2,6 +2,122 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import type { Endpoint, HttpMethod, RiskHint } from './types';
 
+// ─── Router prefix resolution ──────────────────────────────────────────────────
+
+/**
+ * Scans all source files for `app.use('/prefix', importedRouter)` patterns and
+ * resolves the imported file path. Returns a map of absFilePath → mountPrefix.
+ * Does two passes to handle one level of nested router mounting.
+ */
+export async function buildFilePrefixMap(files: string[]): Promise<Map<string, string>> {
+  const prefixMap = new Map<string, string>();
+
+  // app.use('/prefix', ...args) — capture the full argument list after the path string
+  const USE_MOUNT_RE = /(?:app|router|server)\s*\.\s*use\s*\(\s*['"`]([^'"`]+)['"`]\s*,([\s\S]*?)\)/g;
+
+  // import defaultExport from './path'
+  const IMPORT_DEFAULT_RE = /import\s+([a-zA-Z_$][a-zA-Z0-9_$]*)\s+from\s+['"`]([^'"`]+)['"`]/g;
+  // import { named } from './path'  or  import { named as alias } from './path'
+  const IMPORT_NAMED_RE = /import\s+\{[^}]*\b(?:(\w+)\s+as\s+)?(\w+)\s*\}\s*from\s+['"`]([^'"`]+)['"`]/g;
+  // const varName = require('./path')
+  const REQUIRE_RE = /(?:const|let|var)\s+([a-zA-Z_$][a-zA-Z0-9_$]*)\s*=\s*require\s*\(\s*['"`]([^'"`]+)['"`]\s*\)/g;
+
+  async function buildImportMap(source: string): Promise<Map<string, string>> {
+    const map = new Map<string, string>();
+    let m: RegExpExecArray | null;
+
+    const defRe = new RegExp(IMPORT_DEFAULT_RE.source, IMPORT_DEFAULT_RE.flags);
+    while ((m = defRe.exec(source)) !== null) map.set(m[1], m[2]);
+
+    const namedRe = new RegExp(IMPORT_NAMED_RE.source, IMPORT_NAMED_RE.flags);
+    while ((m = namedRe.exec(source)) !== null) {
+      // m[1] is original name if aliased, m[2] is local name, m[3] is path
+      map.set(m[2], m[3]);
+    }
+
+    const reqRe = new RegExp(REQUIRE_RE.source, REQUIRE_RE.flags);
+    while ((m = reqRe.exec(source)) !== null) map.set(m[1], m[2]);
+
+    return map;
+  }
+
+  /** Extract all bare identifiers from a comma-separated argument list (ignores calls like cors()) */
+  function extractIdentifiers(argList: string): string[] {
+    // Only grab bare identifiers — skip anything followed by ( (i.e. function calls)
+    return [...argList.matchAll(/\b([a-zA-Z_$][a-zA-Z0-9_$]*)\b(?!\s*\()/g)].map((m) => m[1]);
+  }
+
+  async function processFile(
+    file: string,
+    existingPrefixMap: Map<string, string>,
+    ownPrefix: string,
+  ): Promise<void> {
+    let source: string;
+    try { source = await fs.readFile(file, 'utf-8'); } catch { return; }
+
+    const importMap = await buildImportMap(source);
+
+    const useRe = new RegExp(USE_MOUNT_RE.source, USE_MOUNT_RE.flags);
+    let m: RegExpExecArray | null;
+    while ((m = useRe.exec(source)) !== null) {
+      const mountPrefix = normalisePath(m[1]);
+      const argList = m[2];
+      const identifiers = extractIdentifiers(argList);
+
+      for (const varName of identifiers) {
+        const importSpec = importMap.get(varName);
+        if (!importSpec) continue;
+
+        const resolved = resolveImportPath(path.dirname(file), importSpec, files);
+        if (!resolved || existingPrefixMap.has(resolved)) continue;
+
+        const composed = ownPrefix
+          ? normalisePath(ownPrefix.replace(/\/$/, '') + '/' + mountPrefix.replace(/^\//, ''))
+          : mountPrefix;
+        existingPrefixMap.set(resolved, composed);
+      }
+    }
+  }
+
+  // First pass: direct mounts from all files
+  for (const file of files) {
+    await processFile(file, prefixMap, '');
+  }
+
+  // Second pass: compose nested prefixes (file A at /api uses file B at /users → B gets /api/users)
+  for (const file of [...prefixMap.keys()]) {
+    const ownPrefix = prefixMap.get(file)!;
+    await processFile(file, prefixMap, ownPrefix);
+  }
+
+  return prefixMap;
+}
+
+function resolveImportPath(fromDir: string, importSpec: string, knownFiles: string[]): string | null {
+  if (!importSpec.startsWith('.')) return null; // skip node_modules
+
+  const base = path.resolve(fromDir, importSpec);
+
+  // Normalise to forward slashes for comparison since walkSourceFiles may use either
+  const normalise = (p: string) => p.replace(/\\/g, '/');
+  const normBase = normalise(base);
+  const normKnown = knownFiles.map(normalise);
+
+  for (const ext of ['', '.ts', '.js', '.mjs', '.cjs']) {
+    const candidate = normBase + ext;
+    const idx = normKnown.indexOf(candidate);
+    if (idx !== -1) return knownFiles[idx];
+  }
+
+  for (const ext of ['.ts', '.js', '.mjs', '.cjs']) {
+    const candidate = normBase + '/index' + ext;
+    const idx = normKnown.indexOf(candidate);
+    if (idx !== -1) return knownFiles[idx];
+  }
+
+  return null;
+}
+
 /**
  * Each pattern captures:
  *   [1] method (or undefined for decorator-style)
@@ -99,7 +215,7 @@ export async function walkSourceFiles(dir: string): Promise<string[]> {
 
 // ─── Route extraction ──────────────────────────────────────────────────────────
 
-export async function extractRoutesFromFile(filePath: string): Promise<Endpoint[]> {
+export async function extractRoutesFromFile(filePath: string, mountPrefix = ''): Promise<Endpoint[]> {
   let source: string;
   try {
     source = await fs.readFile(filePath, 'utf-8');
@@ -118,7 +234,11 @@ export async function extractRoutesFromFile(filePath: string): Promise<Endpoint[
       const rawPath = match[pattern.pathGroup] ?? '/';
 
       const method = normaliseMethod(rawMethod);
-      const normPath = normalisePath(rawPath);
+      // Compose mount prefix + route path, collapsing duplicate slashes
+      const routePath = normalisePath(rawPath);
+      const normPath = mountPrefix
+        ? normalisePath(mountPrefix.replace(/\/$/, '') + '/' + routePath.replace(/^\//, ''))
+        : routePath;
 
       const lineNo = getLineNumber(source, match.index);
       const handlerSource = extractHandlerSource(source, match.index);

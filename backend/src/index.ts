@@ -1,4 +1,12 @@
 import 'dotenv/config';
+
+// Prevent ioredis "Connection is closed" and similar non-fatal errors from crashing the process
+process.on('uncaughtException', (err: Error) => {
+  console.error('[process] uncaught exception (non-fatal):', err.message);
+});
+process.on('unhandledRejection', (reason: unknown) => {
+  console.error('[process] unhandled rejection:', reason instanceof Error ? reason.message : reason);
+});
 import http from 'http';
 import express from 'express';
 import cors from 'cors';
