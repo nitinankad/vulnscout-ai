@@ -76,6 +76,22 @@ export interface BackendFinding {
   createdAt: string;
 }
 
+export interface ScanRequest {
+  id: string;
+  scanId: string;
+  testName: string;
+  vulnClass: string;
+  method: string;
+  url: string;
+  endpoint: string;
+  status: number;
+  requestHeaders: Record<string, string>;
+  requestBody: string | null;
+  responseBody: string | null;
+  vulnerable: 'true' | 'false';
+  createdAt: string;
+}
+
 export type ScanWithFindings = Scan & {
   findings: BackendFinding[];
   serviceName: string | null;
@@ -125,6 +141,8 @@ export const api = {
     get: (id: string) => request<ScanWithFindings>(`/scans/${id}`),
 
     cancel: (id: string) => request<{ ok: boolean }>(`/scans/${id}/cancel`, { method: 'POST' }),
+
+    requests: (id: string) => request<ScanRequest[]>(`/scans/${id}/requests`),
 
     create: (data: { serviceId: string; attackProfile: string }) =>
       request<Scan>('/scans', {

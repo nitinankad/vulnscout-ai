@@ -5,7 +5,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { eq } from 'drizzle-orm';
 import { db } from '../../db';
-import { findings, scans } from '../../db/schema';
+import { findings, scans, scanRequests } from '../../db/schema';
 import { emitEvent } from '../../lib/events';
 import type { AgentEndpoint } from '../static-analysis';
 
@@ -336,6 +336,23 @@ async function recordFindings(
   results: AttackResult[],
   scanId: string,
 ): Promise<number> {
+  // Save every request to the audit log
+  for (const r of results) {
+    await db.insert(scanRequests).values({
+      scanId,
+      testName: r.test_name,
+      vulnClass: r.vuln_class,
+      method: r.method,
+      url: r.request.url,
+      endpoint: r.endpoint,
+      status: r.response.status,
+      requestHeaders: (r.request.headers ?? {}) as Record<string, string>,
+      requestBody: r.request.body ?? null,
+      responseBody: r.response.body?.slice(0, 1000) ?? null,
+      vulnerable: r.vulnerable ? 'true' : 'false',
+    });
+  }
+
   const vulnerable = results.filter((r) => r.vulnerable);
 
   for (const r of vulnerable) {

@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Progress } from '@/components/ui/progress'
 import { MOCK_SCANS, MOCK_FINDINGS, type Finding, type Severity } from '@/lib/mock-data'
-import { api, type ScanWithFindings, type BackendFinding } from '@/lib/api'
+import { api, type ScanWithFindings, type BackendFinding, type ScanRequest } from '@/lib/api'
 import { useAuth } from '@/context/auth'
 import { useScanStream, type ScanEvent } from '@/hooks/useScanStream'
 
@@ -85,7 +85,25 @@ function mapFinding(f: BackendFinding): Finding {
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
+function prettyBody(raw: string | undefined | null): string {
+  if (!raw) return ''
+  try { return JSON.stringify(JSON.parse(raw), null, 2) } catch { return raw }
+}
+
+function parseQueryParams(url: string): [string, string][] {
+  try {
+    const u = new URL(url)
+    return [...u.searchParams.entries()]
+  } catch { return [] }
+}
+
+type FindingTab = 'summary' | 'raw'
+
 function FindingRow({ finding, expanded, onToggle }: { finding: Finding; expanded: boolean; onToggle: () => void }) {
+  const [tab, setTab] = useState<FindingTab>('summary')
+  const queryParams = parseQueryParams(finding.proof_request.url)
+  const statusOk = finding.proof_response.status > 0 && finding.proof_response.status < 400
+
   return (
     <div className="border border-border rounded-lg overflow-hidden">
       <button
@@ -112,54 +130,167 @@ function FindingRow({ finding, expanded, onToggle }: { finding: Finding; expande
       </button>
 
       {expanded && (
-        <div className="border-t border-border px-4 pb-4 pt-4 space-y-4 bg-[oklch(0.08_0.01_200)]">
-          <p className="text-sm text-muted-foreground leading-relaxed">{finding.description}</p>
+        <div className="border-t border-border bg-[oklch(0.08_0.01_200)]">
+          {/* Tab bar */}
+          <div className="flex items-center gap-1 px-4 pt-3 pb-0 border-b border-border">
+            {(['summary', 'raw'] as FindingTab[]).map((t) => (
+              <button
+                key={t}
+                onClick={() => setTab(t)}
+                className={`px-3 py-1.5 text-xs font-medium rounded-t-md border-b-2 transition-colors capitalize -mb-px ${
+                  tab === t
+                    ? 'text-foreground border-primary'
+                    : 'text-muted-foreground border-transparent hover:text-foreground'
+                }`}
+              >
+                {t === 'raw' ? 'Raw HTTP' : 'Summary'}
+              </button>
+            ))}
+          </div>
 
-          <div className="grid md:grid-cols-2 gap-3">
-            {/* Request */}
-            <div>
-              <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-2">Proof — Request</p>
-              <div className="bg-[oklch(0.06_0.008_200)] border border-border rounded-lg p-3 font-mono text-xs space-y-1">
-                <p className="text-primary">{finding.proof_request.method} {finding.proof_request.url}</p>
-                {Object.entries(finding.proof_request.headers).map(([k, v]) => (
-                  <p key={k} className="text-muted-foreground"><span className="text-foreground/60">{k}:</span> {v}</p>
-                ))}
-                {finding.proof_request.body && (
-                  <pre className="text-yellow-400/80 mt-2 whitespace-pre-wrap text-[10px]">{finding.proof_request.body}</pre>
-                )}
+          {tab === 'summary' && (
+            <div className="px-4 pb-4 pt-4 space-y-4">
+              <p className="text-sm text-muted-foreground leading-relaxed">{finding.description}</p>
+
+              <div className="grid md:grid-cols-2 gap-3">
+                <div>
+                  <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-2">Proof — Request</p>
+                  <div className="bg-[oklch(0.06_0.008_200)] border border-border rounded-lg p-3 font-mono text-xs space-y-1">
+                    <p className="text-primary">{finding.proof_request.method} {finding.proof_request.url}</p>
+                    {Object.entries(finding.proof_request.headers).map(([k, v]) => (
+                      <p key={k} className="text-muted-foreground"><span className="text-foreground/60">{k}:</span> {String(v)}</p>
+                    ))}
+                    {finding.proof_request.body && (
+                      <pre className="text-yellow-400/80 mt-2 whitespace-pre-wrap text-[10px]">{prettyBody(finding.proof_request.body)}</pre>
+                    )}
+                  </div>
+                </div>
+                <div>
+                  <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-2">Proof — Response</p>
+                  <div className="bg-[oklch(0.06_0.008_200)] border border-border rounded-lg p-3 font-mono text-xs space-y-1">
+                    <p className={statusOk ? 'text-destructive font-bold' : 'text-primary'}>
+                      HTTP {finding.proof_response.status}
+                    </p>
+                    <pre className="text-muted-foreground whitespace-pre-wrap text-[10px] mt-2">{prettyBody(finding.proof_response.body_excerpt)}</pre>
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-2">Reproduce</p>
+                <div className="bg-[oklch(0.06_0.008_200)] border border-border rounded-lg p-3 font-mono text-xs">
+                  <pre className="text-foreground/80 whitespace-pre-wrap">{finding.curl_command}</pre>
+                </div>
+              </div>
+
+              <div className="bg-primary/5 border border-primary/20 rounded-lg p-3">
+                <p className="text-[10px] text-primary uppercase tracking-wider mb-1.5 font-semibold">Fix suggestion</p>
+                <p className="text-xs text-muted-foreground leading-relaxed">{finding.fix_suggestion}</p>
+              </div>
+
+              <div className="flex items-center gap-2 flex-wrap">
+                <Badge variant="outline" className="text-[10px] border-border text-muted-foreground">{finding.cwe_id}</Badge>
+                <Badge variant="outline" className="text-[10px] border-border text-muted-foreground">{finding.owasp_category}</Badge>
               </div>
             </div>
+          )}
 
-            {/* Response */}
-            <div>
-              <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-2">Proof — Response</p>
-              <div className="bg-[oklch(0.06_0.008_200)] border border-border rounded-lg p-3 font-mono text-xs space-y-1">
-                <p className={finding.proof_response.status < 400 ? 'text-destructive font-bold' : 'text-primary'}>
-                  HTTP {finding.proof_response.status}
-                </p>
-                <pre className="text-muted-foreground whitespace-pre-wrap text-[10px] mt-2">{finding.proof_response.body_excerpt}</pre>
+          {tab === 'raw' && (
+            <div className="px-4 pb-4 pt-4 space-y-4 font-mono text-xs">
+
+              {/* Request line */}
+              <div>
+                <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-2 font-sans">Request</p>
+                <div className="bg-[oklch(0.05_0.008_200)] border border-border rounded-lg overflow-hidden">
+                  <div className="px-3 py-2 border-b border-border bg-[oklch(0.07_0.01_200)]">
+                    <span className={`font-bold mr-2 ${METHOD_COLOR[finding.method] ?? 'text-foreground'}`}>{finding.method}</span>
+                    <span className="text-foreground/80">{finding.proof_request.url}</span>
+                  </div>
+
+                  {/* Query params table */}
+                  {queryParams.length > 0 && (
+                    <div className="border-b border-border">
+                      <p className="text-[10px] text-muted-foreground/60 uppercase px-3 pt-2 pb-1 font-sans">Query parameters</p>
+                      <table className="w-full text-xs">
+                        <tbody>
+                          {queryParams.map(([k, v]) => (
+                            <tr key={k} className="border-b border-border/50 last:border-0">
+                              <td className="px-3 py-1.5 text-primary/80 w-1/3 align-top">{k}</td>
+                              <td className="px-3 py-1.5 text-yellow-400/80 break-all">{v}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+
+                  {/* Headers */}
+                  {Object.keys(finding.proof_request.headers).length > 0 && (
+                    <div className="border-b border-border">
+                      <p className="text-[10px] text-muted-foreground/60 uppercase px-3 pt-2 pb-1 font-sans">Headers</p>
+                      <table className="w-full text-xs">
+                        <tbody>
+                          {Object.entries(finding.proof_request.headers).map(([k, v]) => (
+                            <tr key={k} className="border-b border-border/50 last:border-0">
+                              <td className="px-3 py-1.5 text-foreground/60 w-1/3 align-top">{k}</td>
+                              <td className="px-3 py-1.5 text-muted-foreground break-all">{String(v)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+
+                  {/* Body */}
+                  {finding.proof_request.body ? (
+                    <div>
+                      <p className="text-[10px] text-muted-foreground/60 uppercase px-3 pt-2 pb-1 font-sans">Body</p>
+                      <pre className="px-3 pb-3 text-yellow-400/80 whitespace-pre-wrap text-[11px] leading-relaxed">
+                        {prettyBody(finding.proof_request.body)}
+                      </pre>
+                    </div>
+                  ) : (
+                    <p className="px-3 py-2 text-muted-foreground/40 italic text-[10px]">(no body)</p>
+                  )}
+                </div>
               </div>
+
+              {/* Response */}
+              <div>
+                <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-2 font-sans">Response</p>
+                <div className="bg-[oklch(0.05_0.008_200)] border border-border rounded-lg overflow-hidden">
+                  <div className={`px-3 py-2 border-b border-border font-bold ${
+                    finding.proof_response.status === 0 ? 'text-muted-foreground' :
+                    finding.proof_response.status < 300 ? 'text-primary' :
+                    finding.proof_response.status < 400 ? 'text-yellow-400' : 'text-destructive'
+                  }`}>
+                    HTTP {finding.proof_response.status}
+                    <span className="ml-2 text-[10px] font-normal text-muted-foreground">
+                      {finding.proof_response.status === 200 ? 'OK' :
+                       finding.proof_response.status === 201 ? 'Created' :
+                       finding.proof_response.status === 204 ? 'No Content' :
+                       finding.proof_response.status === 400 ? 'Bad Request' :
+                       finding.proof_response.status === 401 ? 'Unauthorized' :
+                       finding.proof_response.status === 403 ? 'Forbidden' :
+                       finding.proof_response.status === 404 ? 'Not Found' :
+                       finding.proof_response.status === 500 ? 'Internal Server Error' : ''}
+                    </span>
+                  </div>
+                  {finding.proof_response.body_excerpt ? (
+                    <div>
+                      <p className="text-[10px] text-muted-foreground/60 uppercase px-3 pt-2 pb-1 font-sans">Body</p>
+                      <pre className="px-3 pb-3 text-muted-foreground whitespace-pre-wrap text-[11px] leading-relaxed">
+                        {prettyBody(finding.proof_response.body_excerpt)}
+                      </pre>
+                    </div>
+                  ) : (
+                    <p className="px-3 py-2 text-muted-foreground/40 italic text-[10px]">(no body)</p>
+                  )}
+                </div>
+              </div>
+
             </div>
-          </div>
-
-          {/* curl */}
-          <div>
-            <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-2">Reproduce</p>
-            <div className="bg-[oklch(0.06_0.008_200)] border border-border rounded-lg p-3 font-mono text-xs">
-              <pre className="text-foreground/80 whitespace-pre-wrap">{finding.curl_command}</pre>
-            </div>
-          </div>
-
-          {/* Fix */}
-          <div className="bg-primary/5 border border-primary/20 rounded-lg p-3">
-            <p className="text-[10px] text-primary uppercase tracking-wider mb-1.5 font-semibold">Fix suggestion</p>
-            <p className="text-xs text-muted-foreground leading-relaxed">{finding.fix_suggestion}</p>
-          </div>
-
-          <div className="flex items-center gap-2 flex-wrap">
-            <Badge variant="outline" className="text-[10px] border-border text-muted-foreground">{finding.cwe_id}</Badge>
-            <Badge variant="outline" className="text-[10px] border-border text-muted-foreground">{finding.owasp_category}</Badge>
-          </div>
+          )}
         </div>
       )}
     </div>
@@ -308,6 +439,10 @@ export function ScanDetail() {
   const [filter, setFilter] = useState<Severity | 'all'>('all')
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [scanLogOpen, setScanLogOpen] = useState(false)
+  const [auditLogOpen, setAuditLogOpen] = useState(false)
+  const [auditRequests, setAuditRequests] = useState<ScanRequest[] | null>(null)
+  const [auditLoading, setAuditLoading] = useState(false)
+  const [auditExpanded, setAuditExpanded] = useState<Set<string>>(new Set())
   const [scanData, setScanData] = useState<ScanWithFindings | null>(null)
   const [scanDataLoading, setScanDataLoading] = useState(isRealScan)
   const [cancelling, setCancelling] = useState(false)
@@ -553,6 +688,139 @@ export function ScanDetail() {
           />
         ))}
       </div>
+
+      {/* Audit log — all requests */}
+      {isRealScan && (
+        <div className="mt-4 bg-[oklch(0.07_0.01_200)] border border-border rounded-xl overflow-hidden">
+          <button
+            className="w-full flex items-center justify-between px-4 py-3 hover:bg-white/[0.02] transition-colors"
+            onClick={async () => {
+              const opening = !auditLogOpen;
+              setAuditLogOpen(opening);
+              if (opening && auditRequests === null && id) {
+                setAuditLoading(true);
+                try {
+                  const reqs = await api.scans.requests(id);
+                  setAuditRequests(reqs);
+                } catch { setAuditRequests([]); }
+                finally { setAuditLoading(false); }
+              }
+            }}
+          >
+            <div className="flex items-center gap-2">
+              <svg className="w-3.5 h-3.5 text-muted-foreground" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+              </svg>
+              <span className="text-xs font-medium text-muted-foreground">Full request audit log</span>
+              {auditRequests !== null && (
+                <span className="text-[10px] text-muted-foreground/50 bg-muted/20 border border-border px-1.5 py-0.5 rounded">
+                  {auditRequests.length} requests · {auditRequests.filter(r => r.vulnerable === 'true').length} vulnerable
+                </span>
+              )}
+            </div>
+            <svg
+              className={`w-4 h-4 text-muted-foreground transition-transform ${auditLogOpen ? 'rotate-180' : ''}`}
+              fill="none" viewBox="0 0 24 24" stroke="currentColor"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+            </svg>
+          </button>
+
+          {auditLogOpen && (
+            <div className="border-t border-border">
+              {auditLoading && (
+                <div className="flex items-center gap-2 px-4 py-6 text-xs text-muted-foreground">
+                  <svg className="w-3.5 h-3.5 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 12a8 8 0 018-8v4l3-3-3-3V4a10 10 0 100 20v-2a8 8 0 01-8-8z" />
+                  </svg>
+                  Loading audit log…
+                </div>
+              )}
+              {!auditLoading && auditRequests?.length === 0 && (
+                <p className="px-4 py-6 text-xs text-muted-foreground/50 text-center">No requests recorded for this scan.</p>
+              )}
+              {!auditLoading && auditRequests && auditRequests.length > 0 && (
+                <div className="divide-y divide-border">
+                  {auditRequests.map((req) => {
+                    const isVuln = req.vulnerable === 'true';
+                    const isOpen = auditExpanded.has(req.id);
+                    return (
+                      <div key={req.id}>
+                        <button
+                          className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-white/[0.02] transition-colors text-left font-mono text-xs"
+                          onClick={() => setAuditExpanded(prev => {
+                            const next = new Set(prev);
+                            next.has(req.id) ? next.delete(req.id) : next.add(req.id);
+                            return next;
+                          })}
+                        >
+                          <span className={`flex-shrink-0 w-1.5 h-1.5 rounded-full ${isVuln ? 'bg-destructive' : 'bg-muted-foreground/30'}`} />
+                          <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded flex-shrink-0 ${METHOD_COLOR[req.method] ?? 'text-muted-foreground bg-muted/20'}`}>
+                            {req.method}
+                          </span>
+                          <span className={`flex-shrink-0 text-[10px] font-mono font-bold w-10 text-right ${
+                            req.status === 0 ? 'text-muted-foreground' :
+                            req.status < 300 ? 'text-primary' :
+                            req.status < 400 ? 'text-yellow-400' : 'text-destructive'
+                          }`}>{req.status || '—'}</span>
+                          <span className="text-muted-foreground flex-shrink-0 truncate max-w-xs">{req.endpoint}</span>
+                          <span className="text-muted-foreground/40 flex-shrink-0 text-[10px]">{req.vulnClass.replace(/_/g, ' ')}</span>
+                          {isVuln && (
+                            <span className="text-destructive text-[10px] font-semibold flex-shrink-0 ml-auto">VULNERABLE</span>
+                          )}
+                          <svg className={`w-3 h-3 text-muted-foreground/40 flex-shrink-0 transition-transform ${isOpen ? 'rotate-180' : ''} ${isVuln ? '' : 'ml-auto'}`}
+                            fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                          </svg>
+                        </button>
+
+                        {isOpen && (
+                          <div className="px-4 pb-3 pt-1 bg-[oklch(0.06_0.008_200)] space-y-3 font-mono text-xs border-t border-border/50">
+                            {/* Request */}
+                            <div>
+                              <p className="text-[10px] text-muted-foreground/60 uppercase font-sans mb-1.5">Request</p>
+                              <div className="bg-[oklch(0.05_0.005_200)] rounded border border-border/50 overflow-hidden">
+                                <div className="px-3 py-2 border-b border-border/50">
+                                  <span className={`font-bold mr-2 ${METHOD_COLOR[req.method] ?? 'text-foreground'}`}>{req.method}</span>
+                                  <span className="text-foreground/70 break-all">{req.url}</span>
+                                </div>
+                                {Object.keys(req.requestHeaders).length > 0 && (
+                                  <div className="px-3 py-2 border-b border-border/50 space-y-0.5">
+                                    {Object.entries(req.requestHeaders).map(([k, v]) => (
+                                      <div key={k}><span className="text-foreground/50">{k}: </span><span className="text-muted-foreground">{String(v)}</span></div>
+                                    ))}
+                                  </div>
+                                )}
+                                {req.requestBody && (
+                                  <pre className="px-3 py-2 text-yellow-400/70 whitespace-pre-wrap text-[11px]">{prettyBody(req.requestBody)}</pre>
+                                )}
+                              </div>
+                            </div>
+                            {/* Response */}
+                            <div>
+                              <p className="text-[10px] text-muted-foreground/60 uppercase font-sans mb-1.5">Response</p>
+                              <div className="bg-[oklch(0.05_0.005_200)] rounded border border-border/50 overflow-hidden">
+                                <div className={`px-3 py-2 border-b border-border/50 font-bold text-[11px] ${
+                                  req.status === 0 ? 'text-muted-foreground' :
+                                  req.status < 300 ? 'text-primary' :
+                                  req.status < 400 ? 'text-yellow-400' : 'text-destructive'
+                                }`}>HTTP {req.status || '(no response)'}</div>
+                                {req.responseBody && (
+                                  <pre className="px-3 py-2 text-muted-foreground whitespace-pre-wrap text-[11px]">{prettyBody(req.responseBody)}</pre>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Scan execution log */}
       {events.length > 0 && (

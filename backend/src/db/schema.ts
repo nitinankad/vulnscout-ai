@@ -55,6 +55,22 @@ export const scans = pgTable('scans', {
   errorMessage: text('error_message'),
 });
 
+export const scanRequests = pgTable('scan_requests', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  scanId: uuid('scan_id').references(() => scans.id, { onDelete: 'cascade' }).notNull(),
+  testName: text('test_name').notNull(),
+  vulnClass: text('vuln_class').notNull(),
+  method: text('method').notNull(),
+  url: text('url').notNull(),
+  endpoint: text('endpoint').notNull(),
+  status: integer('status').notNull(),
+  requestHeaders: jsonb('request_headers').$type<Record<string, string>>().notNull(),
+  requestBody: text('request_body'),
+  responseBody: text('response_body'),
+  vulnerable: text('vulnerable').notNull(), // 'true' | 'false' — avoids boolean drizzle quirks
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
 export const findings = pgTable('findings', {
   id: uuid('id').primaryKey().defaultRandom(),
   scanId: uuid('scan_id').references(() => scans.id, { onDelete: 'cascade' }).notNull(),
