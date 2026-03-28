@@ -1,40 +1,57 @@
+import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Button } from '@/components/ui/button'
-import { MOCK_SCANS } from '@/lib/mock-data'
+import { api, type Service, type Scan } from '@/lib/api'
 
-const STATUS_BADGE: Record<string, string> = {
-  completed: 'text-primary bg-primary/10 border-primary/30',
-  running: 'text-yellow-400 bg-yellow-400/10 border-yellow-400/30',
-  failed: 'text-destructive bg-destructive/10 border-destructive/30',
-  queued: 'text-muted-foreground bg-muted/30 border-border',
+function formatRelative(iso: string) {
+  const diff = Date.now() - new Date(iso).getTime()
+  const mins = Math.floor(diff / 60000)
+  if (mins < 2) return 'just now'
+  if (mins < 60) return `${mins}m ago`
+  const hrs = Math.floor(mins / 60)
+  if (hrs < 24) return `${hrs}h ago`
+  return `${Math.floor(hrs / 24)}d ago`
 }
 
-function SeverityDot({ count, color }: { count: number; color: string }) {
-  if (count === 0) return <span className="text-muted-foreground/40 text-xs">—</span>
-  return <span className={`text-xs font-semibold ${color}`}>{count}</span>
+const STATUS_COLOR: Record<string, string> = {
+  completed: 'bg-primary',
+  running: 'bg-yellow-400',
+  failed: 'bg-destructive',
+  queued: 'bg-muted-foreground/40',
 }
 
 export function Overview() {
   const navigate = useNavigate()
+  const [services, setServices] = useState<Service[]>([])
+  const [scans, setScans] = useState<Scan[]>([])
+  const [loading, setLoading] = useState(true)
 
-  const totalVulns = MOCK_SCANS.reduce((a, s) => a + s.critical + s.high + s.medium + s.low, 0)
-  const totalCritical = MOCK_SCANS.reduce((a, s) => a + s.critical, 0)
-  const completedScans = MOCK_SCANS.filter(s => s.status === 'completed').length
+  useEffect(() => {
+    Promise.all([api.services.list(), api.scans.list()])
+      .then(([s, sc]) => { setServices(s); setScans(sc) })
+      .catch(() => {})
+      .finally(() => setLoading(false))
+  }, [])
+
+  const completed = scans.filter((s) => s.status === 'completed')
+  const totalFindings = completed.reduce((a, s) => a + s.critical + s.high + s.medium + s.low, 0)
+  const totalCritical = completed.reduce((a, s) => a + s.critical, 0)
+  const totalRequests = completed.reduce((a, s) => a + s.requestsFired, 0)
 
   const STATS = [
     {
-      label: 'Total scans',
-      value: MOCK_SCANS.length.toString(),
-      sub: `${completedScans} completed`,
+      label: 'Services',
+      value: loading ? '—' : services.length.toString(),
+      sub: 'connected',
       icon: (
         <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.75} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.75} d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2" />
         </svg>
       ),
     },
     {
-      label: 'Vulnerabilities found',
-      value: totalVulns.toString(),
+      label: 'Findings',
+      value: loading ? '—' : totalFindings.toString(),
       sub: 'across all scans',
       icon: (
         <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -43,10 +60,10 @@ export function Overview() {
       ),
     },
     {
-      label: 'Critical findings',
-      value: totalCritical.toString(),
-      sub: 'require immediate fix',
-      danger: true,
+      label: 'Critical',
+      value: loading ? '—' : totalCritical.toString(),
+      sub: 'need attention',
+      danger: totalCritical > 0,
       icon: (
         <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.75} d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
@@ -54,24 +71,30 @@ export function Overview() {
       ),
     },
     {
-      label: 'Avg scan time',
-      value: '6m 36s',
-      sub: 'for completed scans',
+      label: 'Requests fired',
+      value: loading ? '—' : totalRequests.toLocaleString(),
+      sub: 'in completed scans',
       icon: (
         <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.75} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.75} d="M13 10V3L4 14h7v7l9-11h-7z" />
         </svg>
       ),
     },
   ]
 
+  // Last 10 scans sorted most recent first
+  const serviceMap = new Map(services.map((s) => [s.id, s]))
+  const recent = [...scans]
+    .sort((a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime())
+    .slice(0, 10)
+
   return (
-    <div className="p-8 max-w-6xl">
+    <div className="p-8 max-w-4xl">
       {/* Header */}
       <div className="flex items-center justify-between mb-8">
         <div>
-          <h1 className="text-2xl font-bold text-foreground tracking-tight">Overview</h1>
-          <p className="text-sm text-muted-foreground mt-0.5">Welcome back, Nobody</p>
+          <h1 className="text-2xl font-bold text-foreground tracking-tight">Dashboard</h1>
+          <p className="text-sm text-muted-foreground mt-0.5">Security posture at a glance</p>
         </div>
         <Button
           className="bg-primary text-primary-foreground hover:bg-primary/90 glow-green h-9 font-medium text-sm"
@@ -87,15 +110,12 @@ export function Overview() {
       {/* Stats */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
         {STATS.map((stat) => (
-          <div
-            key={stat.label}
-            className="bg-card border border-border rounded-xl p-4 flex flex-col gap-3"
-          >
+          <div key={stat.label} className="bg-card border border-border rounded-xl p-4 flex flex-col gap-3">
             <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${stat.danger ? 'bg-destructive/10 text-destructive' : 'bg-primary/10 text-primary'}`}>
               {stat.icon}
             </div>
             <div>
-              <p className={`text-2xl font-bold ${stat.danger ? 'text-destructive' : 'text-foreground'}`}>
+              <p className={`text-2xl font-bold tabular-nums ${stat.danger ? 'text-destructive' : 'text-foreground'}`}>
                 {stat.value}
               </p>
               <p className="text-xs text-muted-foreground mt-0.5">{stat.label}</p>
@@ -104,77 +124,90 @@ export function Overview() {
         ))}
       </div>
 
-      {/* Recent scans */}
+      {/* Recent activity */}
       <div className="bg-card border border-border rounded-xl overflow-hidden">
         <div className="flex items-center justify-between px-5 py-4 border-b border-border">
-          <h2 className="text-sm font-semibold text-foreground">Recent scans</h2>
+          <h2 className="text-sm font-semibold text-foreground">Recent activity</h2>
           <button
             className="text-xs text-muted-foreground hover:text-primary transition-colors"
-            onClick={() => navigate('/app/scans')}
+            onClick={() => navigate('/app/services')}
           >
-            View all →
+            All services →
           </button>
         </div>
 
-        <div className="divide-y divide-border">
-          {MOCK_SCANS.map((scan) => (
-            <div
-              key={scan.id}
-              className="flex items-center gap-4 px-5 py-3.5 hover:bg-white/[0.02] cursor-pointer transition-colors"
-              onClick={() => navigate(`/app/scans/${scan.id}`)}
+        {loading && (
+          <div className="px-5 py-10 text-center text-sm text-muted-foreground">Loading…</div>
+        )}
+
+        {!loading && recent.length === 0 && (
+          <div className="px-5 py-12 text-center">
+            <p className="text-sm text-muted-foreground mb-3">No scans yet.</p>
+            <Button
+              size="sm"
+              className="bg-primary text-primary-foreground hover:bg-primary/90 h-8 text-xs"
+              onClick={() => navigate('/app/scans/new')}
             >
-              {/* Service */}
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
-                  <p className="text-sm font-medium text-foreground truncate">{scan.service_name}</p>
-                  {scan.branch && (
-                    <span className="text-[10px] font-mono text-muted-foreground bg-muted/30 px-1.5 py-0.5 rounded border border-border flex-shrink-0">
-                      {scan.branch}
-                    </span>
+              Run your first scan
+            </Button>
+          </div>
+        )}
+
+        {!loading && recent.length > 0 && (
+          <div className="divide-y divide-border">
+            {recent.map((scan) => {
+              const svc = serviceMap.get(scan.serviceId)
+              const totalF = scan.critical + scan.high + scan.medium + scan.low
+              return (
+                <div
+                  key={scan.id}
+                  className="flex items-center gap-4 px-5 py-3 hover:bg-white/[0.02] cursor-pointer transition-colors"
+                  onClick={() => navigate(`/app/scans/${scan.id}`)}
+                >
+                  {/* Status dot */}
+                  <div className={`w-2 h-2 rounded-full flex-shrink-0 ${STATUS_COLOR[scan.status]}`} />
+
+                  {/* Service name */}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <p className="text-sm font-medium text-foreground truncate">
+                        {svc?.name ?? 'Unknown service'}
+                      </p>
+                      {svc?.branch && (
+                        <span className="text-[10px] font-mono text-muted-foreground bg-muted/30 px-1.5 py-0.5 rounded border border-border flex-shrink-0">
+                          {svc.branch}
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-0.5">{scan.attackProfile} · {formatRelative(scan.startedAt)}</p>
+                  </div>
+
+                  {/* Findings summary */}
+                  {scan.status === 'completed' && totalF > 0 ? (
+                    <div className="flex items-center gap-2.5 flex-shrink-0">
+                      {scan.critical > 0 && <span className="text-xs font-semibold text-destructive">{scan.critical}C</span>}
+                      {scan.high > 0 && <span className="text-xs font-semibold text-orange-400">{scan.high}H</span>}
+                      {scan.medium > 0 && <span className="text-xs font-semibold text-yellow-400">{scan.medium}M</span>}
+                      {scan.low > 0 && <span className="text-xs font-semibold text-muted-foreground">{scan.low}L</span>}
+                    </div>
+                  ) : scan.status === 'completed' ? (
+                    <span className="text-xs text-muted-foreground/40 flex-shrink-0">clean</span>
+                  ) : (
+                    <span className={`text-[10px] font-semibold uppercase flex-shrink-0 ${
+                      scan.status === 'running' ? 'text-yellow-400' :
+                      scan.status === 'failed' ? 'text-destructive' :
+                      'text-muted-foreground'
+                    }`}>{scan.status}</span>
                   )}
+
+                  <svg className="w-4 h-4 text-muted-foreground/30 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                  </svg>
                 </div>
-                <p className="text-xs text-muted-foreground truncate mt-0.5">{scan.service_source}</p>
-              </div>
-
-              {/* Severity counts */}
-              <div className="flex items-center gap-3 flex-shrink-0">
-                <div className="flex items-center gap-1.5">
-                  <SeverityDot count={scan.critical} color="text-destructive" />
-                  <span className="text-[10px] text-muted-foreground">C</span>
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <SeverityDot count={scan.high} color="text-orange-400" />
-                  <span className="text-[10px] text-muted-foreground">H</span>
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <SeverityDot count={scan.medium} color="text-yellow-400" />
-                  <span className="text-[10px] text-muted-foreground">M</span>
-                </div>
-              </div>
-
-              {/* Profile */}
-              <span className="text-xs text-muted-foreground flex-shrink-0 hidden lg:block w-20 text-right">
-                {scan.attack_profile}
-              </span>
-
-              {/* Status */}
-              <span
-                className={`text-[10px] font-semibold uppercase px-2 py-0.5 rounded-full border flex-shrink-0 ${STATUS_BADGE[scan.status]}`}
-              >
-                {scan.status}
-              </span>
-
-              {/* Duration */}
-              <span className="text-xs text-muted-foreground flex-shrink-0 w-16 text-right">
-                {scan.duration ?? '—'}
-              </span>
-
-              <svg className="w-4 h-4 text-muted-foreground/40 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-              </svg>
-            </div>
-          ))}
-        </div>
+              )
+            })}
+          </div>
+        )}
       </div>
     </div>
   )

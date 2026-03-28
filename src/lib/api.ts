@@ -92,6 +92,11 @@ export interface ScanRequest {
   createdAt: string;
 }
 
+export interface FindingWithContext extends BackendFinding {
+  serviceName: string | null;
+  scanStartedAt: string | null;
+}
+
 export type ScanWithFindings = Scan & {
   findings: BackendFinding[];
   serviceName: string | null;
@@ -134,6 +139,10 @@ export const api = {
 
     delete: (id: string) =>
       request<void>(`/services/${id}`, { method: 'DELETE' }),
+  },
+
+  findings: {
+    list: () => request<FindingWithContext[]>('/findings'),
   },
 
   scans: {

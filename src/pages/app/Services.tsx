@@ -3,13 +3,6 @@ import { useNavigate } from 'react-router-dom'
 import { api, type Service, type Scan } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 
-const STATUS_BADGE: Record<string, string> = {
-  completed: 'text-primary bg-primary/10 border-primary/30',
-  running: 'text-yellow-400 bg-yellow-400/10 border-yellow-400/30',
-  failed: 'text-destructive bg-destructive/10 border-destructive/30',
-  queued: 'text-muted-foreground bg-muted/30 border-border',
-}
-
 function GitHubIcon() {
   return (
     <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
@@ -26,15 +19,6 @@ function DocIcon() {
   )
 }
 
-function SeverityPill({ count, label, color }: { count: number; label: string; color: string }) {
-  if (count === 0) return <span className="text-muted-foreground/40 text-xs tabular-nums">—</span>
-  return (
-    <span className={`text-xs font-semibold tabular-nums ${color}`}>
-      {count}<span className="text-muted-foreground/50 font-normal ml-0.5">{label}</span>
-    </span>
-  )
-}
-
 function formatRelative(iso: string) {
   const diff = Date.now() - new Date(iso).getTime()
   const mins = Math.floor(diff / 60000)
@@ -44,30 +28,38 @@ function formatRelative(iso: string) {
   return `${Math.floor(hrs / 24)}d ago`
 }
 
-interface ServiceRow {
+const STATUS_BADGE: Record<string, string> = {
+  completed: 'text-primary bg-primary/10 border-primary/30',
+  running: 'text-yellow-400 bg-yellow-400/10 border-yellow-400/30',
+  failed: 'text-destructive bg-destructive/10 border-destructive/30',
+  queued: 'text-muted-foreground bg-muted/30 border-border',
+}
+
+interface Row {
   service: Service
   latestScan: Scan | null
+  scanCount: number
 }
 
 export function Services() {
   const navigate = useNavigate()
   const [search, setSearch] = useState('')
-  const [rows, setRows] = useState<ServiceRow[]>([])
+  const [rows, setRows] = useState<Row[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     Promise.all([api.services.list(), api.scans.list()])
       .then(([services, scans]) => {
-        const built: ServiceRow[] = services.map((svc) => {
+        const built: Row[] = services.map((svc) => {
           const svcScans = scans
             .filter((s) => s.serviceId === svc.id)
             .sort((a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime())
-          return { service: svc, latestScan: svcScans[0] ?? null }
+          return { service: svc, latestScan: svcScans[0] ?? null, scanCount: svcScans.length }
         })
         setRows(built)
       })
-      .catch((err) => setError(err.message))
+      .catch((err: Error) => setError(err.message))
       .finally(() => setLoading(false))
   }, [])
 
@@ -77,16 +69,13 @@ export function Services() {
       service.source.toLowerCase().includes(search.toLowerCase()),
   )
 
-  const totalCritical = rows.reduce((sum, r) => sum + (r.latestScan?.critical ?? 0), 0)
-  const completedScans = rows.filter((r) => r.latestScan?.status === 'completed').length
-
   return (
     <div className="p-8">
       <div className="flex items-center justify-between mb-8">
         <div>
           <h1 className="text-2xl font-bold text-foreground tracking-tight">Services</h1>
           <p className="text-sm text-muted-foreground mt-0.5">
-            {loading ? 'Loading…' : `${rows.length} connected · ${rows.filter(r => (r.latestScan?.critical ?? 0) > 0).length} with critical findings`}
+            {loading ? 'Loading…' : `${rows.length} connected`}
           </p>
         </div>
         <Button
@@ -96,25 +85,8 @@ export function Services() {
           <svg className="w-4 h-4 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 4v16m8-8H4" />
           </svg>
-          Connect service
+          Add service
         </Button>
-      </div>
-
-      {/* Summary strip */}
-      <div className="grid grid-cols-3 gap-4 mb-6">
-        {[
-          { label: 'Services', value: rows.length, sub: 'connected' },
-          { label: 'Critical', value: totalCritical, sub: 'open findings', danger: true },
-          { label: 'Scans run', value: completedScans, sub: 'completed' },
-        ].map((s) => (
-          <div key={s.label} className="bg-card border border-border rounded-xl px-4 py-3 flex items-center gap-3">
-            <p className={`text-xl font-bold ${s.danger ? 'text-destructive' : 'text-foreground'}`}>{s.value}</p>
-            <div>
-              <p className="text-xs text-muted-foreground">{s.label}</p>
-              <p className="text-[10px] text-muted-foreground/50">{s.sub}</p>
-            </div>
-          </div>
-        ))}
       </div>
 
       {/* Search */}
@@ -130,17 +102,16 @@ export function Services() {
         />
       </div>
 
-      {/* Table */}
       <div className="bg-card border border-border rounded-xl overflow-hidden">
-        <div className="grid grid-cols-[1fr_auto_auto_auto] gap-0 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60 px-5 py-2.5 border-b border-border bg-muted/10">
+        <div className="grid grid-cols-[1fr_auto_auto_auto] text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60 px-5 py-2.5 border-b border-border bg-muted/10">
           <span>Service</span>
-          <span className="w-40 text-right">Findings</span>
-          <span className="w-28 text-right">Last scanned</span>
-          <span className="w-24 text-right">Status</span>
+          <span className="w-36 text-right">Findings</span>
+          <span className="w-28 text-right">Last scan</span>
+          <span className="w-28 text-right">Status</span>
         </div>
 
         {loading && (
-          <div className="px-5 py-10 text-center text-sm text-muted-foreground">Loading services…</div>
+          <div className="px-5 py-10 text-center text-sm text-muted-foreground">Loading…</div>
         )}
 
         {error && (
@@ -149,11 +120,13 @@ export function Services() {
 
         {!loading && !error && (
           <div className="divide-y divide-border">
-            {filtered.map(({ service, latestScan }) => (
+            {filtered.map(({ service, latestScan, scanCount }) => (
               <div
                 key={service.id}
-                className="grid grid-cols-[1fr_auto_auto_auto] gap-0 items-center px-5 py-4 hover:bg-white/[0.02] transition-colors group"
+                className="grid grid-cols-[1fr_auto_auto_auto] items-center px-5 py-4 hover:bg-white/[0.02] transition-colors cursor-pointer group"
+                onClick={() => navigate(`/app/services/${service.id}`)}
               >
+                {/* Service info */}
                 <div className="flex items-center gap-3 min-w-0">
                   <div className="w-8 h-8 rounded-lg bg-muted/30 border border-border flex items-center justify-center flex-shrink-0 text-muted-foreground">
                     {service.sourceType === 'github' ? <GitHubIcon /> : <DocIcon />}
@@ -167,28 +140,41 @@ export function Services() {
                         </span>
                       )}
                     </div>
-                    <p className="text-xs text-muted-foreground truncate mt-0.5">{service.source}</p>
+                    <p className="text-xs text-muted-foreground truncate mt-0.5">
+                      {service.source}
+                      {scanCount > 0 && <span className="ml-2 opacity-50">· {scanCount} scan{scanCount !== 1 ? 's' : ''}</span>}
+                    </p>
                   </div>
                 </div>
 
-                <div className="w-40 flex items-center justify-end gap-3">
-                  <SeverityPill count={latestScan?.critical ?? 0} label="C" color="text-destructive" />
-                  <SeverityPill count={latestScan?.high ?? 0} label="H" color="text-orange-400" />
-                  <SeverityPill count={latestScan?.medium ?? 0} label="M" color="text-yellow-400" />
-                  <SeverityPill count={latestScan?.low ?? 0} label="L" color="text-muted-foreground" />
+                {/* Findings */}
+                <div className="w-36 flex items-center justify-end gap-2.5">
+                  {latestScan ? (
+                    <>
+                      {latestScan.critical > 0 && <span className="text-xs font-semibold text-destructive">{latestScan.critical}C</span>}
+                      {latestScan.high > 0 && <span className="text-xs font-semibold text-orange-400">{latestScan.high}H</span>}
+                      {latestScan.medium > 0 && <span className="text-xs font-semibold text-yellow-400">{latestScan.medium}M</span>}
+                      {latestScan.low > 0 && <span className="text-xs font-semibold text-muted-foreground">{latestScan.low}L</span>}
+                      {(latestScan.critical + latestScan.high + latestScan.medium + latestScan.low) === 0 && latestScan.status === 'completed' && (
+                        <span className="text-xs text-muted-foreground/40">clean</span>
+                      )}
+                    </>
+                  ) : (
+                    <span className="text-xs text-muted-foreground/40">—</span>
+                  )}
                 </div>
 
+                {/* Last scan time */}
                 <div className="w-28 text-right">
-                  {latestScan?.status === 'failed' ? (
-                    <span className="text-xs text-destructive">Scan failed</span>
-                  ) : latestScan ? (
+                  {latestScan ? (
                     <span className="text-xs text-muted-foreground">{formatRelative(latestScan.startedAt)}</span>
                   ) : (
                     <span className="text-xs text-muted-foreground/40">Never</span>
                   )}
                 </div>
 
-                <div className="w-24 flex items-center justify-end gap-2">
+                {/* Status + scan action */}
+                <div className="w-28 flex items-center justify-end gap-2">
                   {latestScan && (
                     <span className={`text-[10px] font-semibold uppercase px-2 py-0.5 rounded-full border ${STATUS_BADGE[latestScan.status]}`}>
                       {latestScan.status}
@@ -196,7 +182,7 @@ export function Services() {
                   )}
                   <button
                     className="text-[10px] font-medium text-primary opacity-0 group-hover:opacity-100 transition-opacity hover:underline"
-                    onClick={() => navigate('/app/scans/new')}
+                    onClick={(e) => { e.stopPropagation(); navigate('/app/scans/new') }}
                   >
                     Scan
                   </button>

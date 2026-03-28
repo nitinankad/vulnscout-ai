@@ -7,11 +7,10 @@ import { Pricing } from '@/pages/Pricing'
 import { Login } from '@/pages/Login'
 import { AppLayout } from '@/pages/app/Layout'
 import { Overview } from '@/pages/app/Overview'
-import { Scans } from '@/pages/app/Scans'
 import { NewScan } from '@/pages/app/NewScan'
 import { ScanDetail } from '@/pages/app/ScanDetail'
 import { Services } from '@/pages/app/Services'
-import { Reports } from '@/pages/app/Reports'
+import { ServiceDetail } from '@/pages/app/ServiceDetail'
 import { Settings } from '@/pages/app/Settings'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }): React.ReactElement {
@@ -39,11 +38,10 @@ export default function App() {
           element={<ProtectedRoute><AppLayout /></ProtectedRoute>}
         >
           <Route index element={<Overview />} />
-          <Route path="scans" element={<Scans />} />
+          <Route path="services" element={<Services />} />
+          <Route path="services/:id" element={<ServiceDetail />} />
           <Route path="scans/new" element={<NewScan />} />
           <Route path="scans/:id" element={<ScanDetail />} />
-          <Route path="services" element={<Services />} />
-          <Route path="reports" element={<Reports />} />
           <Route path="settings" element={<Settings />} />
         </Route>
       </Routes>

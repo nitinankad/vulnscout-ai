@@ -17,6 +17,7 @@ import { attachSocketIO } from './lib/socket';
 import authRouter from './routes/auth';
 import servicesRouter from './routes/services';
 import scansRouter from './routes/scans';
+import findingsRouter from './routes/findings';
 
 const app = express();
 const PORT = process.env.PORT ?? 3000;
@@ -32,6 +33,7 @@ app.get('/health', (_req, res) => {
 app.use('/auth', authRouter);
 app.use('/services', servicesRouter);
 app.use('/scans', scansRouter);
+app.use('/findings', findingsRouter);
 
 // ─── Global error handler ─────────────────────────────────────────────────────
 // eslint-disable-next-line @typescript-eslint/no-unused-vars

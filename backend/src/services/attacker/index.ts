@@ -61,6 +61,143 @@ interface AttackResult {
   owasp_category: string;
 }
 
+// ─── Bootstrap auth ───────────────────────────────────────────────────────────
+
+/**
+ * Flexible bootstrap state: whatever key-value pairs were captured from auth responses.
+ * Special key `_authHeader` holds the full Authorization header value (e.g. "Bearer eyJ...")
+ * that the attack script should use for bearer-authenticated requests.
+ */
+type BootstrapState = Record<string, string>;
+
+/** Ask the LLM to generate a valid request body for a given endpoint. */
+async function generateTestBody(ep: AgentEndpoint): Promise<Record<string, unknown>> {
+  if (ep.body_fields.length === 0) return {};
+  try {
+    const response = await client.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 512,
+      messages: [{
+        role: 'user',
+        content: `Generate a valid JSON request body for a ${ep.method} ${ep.path} endpoint.\nRequired fields: ${ep.body_fields.join(', ')}\nReturn ONLY a valid JSON object with those fields and realistic test values. No explanation.`,
+      }],
+    });
+    const text = response.content[0].type === 'text' ? response.content[0].text.trim() : '{}';
+    const match = text.match(/\{[\s\S]*\}/);
+    if (match) return JSON.parse(match[0]) as Record<string, unknown>;
+  } catch {
+    // fall through to empty
+  }
+  return {};
+}
+
+/** Flatten a JSON object into key=value pairs for state capture (depth 2, strings/numbers only). */
+function flattenResponse(obj: unknown, prefix = ''): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (typeof obj !== 'object' || obj === null || Array.isArray(obj)) return out;
+  for (const [k, v] of Object.entries(obj as Record<string, unknown>)) {
+    const key = prefix ? `${prefix}.${k}` : k;
+    if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') {
+      out[key] = String(v);
+    } else if (typeof v === 'object' && v !== null && !Array.isArray(v)) {
+      Object.assign(out, flattenResponse(v, key));
+    }
+  }
+  return out;
+}
+
+/** Find an auth header value by scanning flattened state keys for common token field names. */
+function resolveAuthHeader(flat: Record<string, string>): string | null {
+  const TOKEN_PATTERNS = [
+    /token$/i, /^token/i, /accessToken/i, /access_token/i,
+    /^jwt/i, /authToken/i, /auth_token/i, /bearerToken/i, /bearer_token/i, /idToken/i, /id_token/i,
+  ];
+  for (const [k, v] of Object.entries(flat)) {
+    if (TOKEN_PATTERNS.some((re) => re.test(k)) && v.length > 8) {
+      // Looks like a JWT if it has dots; otherwise treat as opaque bearer token
+      return v.startsWith('Bearer ') ? v : `Bearer ${v}`;
+    }
+  }
+  return null;
+}
+
+async function bootstrapAuth(
+  endpoints: AgentEndpoint[],
+  targetBaseUrl: string,
+  scanId: string,
+): Promise<BootstrapState> {
+  const state: BootstrapState = {};
+
+  const registerEp = endpoints.find((e) => e.method === 'POST' && /register|signup|sign_up/i.test(e.path));
+  const loginEp = endpoints.find((e) => e.method === 'POST' && /login|signin|sign_in|auth\/token|oauth\/token/i.test(e.path));
+
+  if (!registerEp && !loginEp) {
+    await emitEvent(scanId, 'info', 'Bootstrap: no register/login endpoints found — skipping auth bootstrap');
+    return state;
+  }
+
+  // ── Register ────────────────────────────────────────────────────────────────
+  if (registerEp) {
+    const body = await generateTestBody(registerEp);
+    await emitEvent(scanId, 'info', `Bootstrap: registering test user at ${registerEp.path}`);
+    try {
+      const res = await fetch(targetBaseUrl + substituteParams(registerEp.path), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(8000),
+      });
+      const text = await res.text();
+      await emitEvent(scanId, 'info', `Bootstrap register → ${res.status}`);
+      try {
+        const flat = flattenResponse(JSON.parse(text));
+        Object.assign(state, flat);
+        const authHeader = resolveAuthHeader(flat);
+        if (authHeader && !state['_authHeader']) state['_authHeader'] = authHeader;
+      } catch { /* not JSON */ }
+    } catch (err) {
+      await emitEvent(scanId, 'info', `Bootstrap register failed: ${(err as Error).message}`);
+    }
+  }
+
+  // ── Login (always attempt; overwrites state with fresher values) ─────────────
+  if (loginEp) {
+    const body = await generateTestBody(loginEp);
+    await emitEvent(scanId, 'info', `Bootstrap: logging in at ${loginEp.path}`);
+    try {
+      const res = await fetch(targetBaseUrl + substituteParams(loginEp.path), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(8000),
+      });
+      const text = await res.text();
+      await emitEvent(scanId, 'info', `Bootstrap login → ${res.status}`);
+      try {
+        const flat = flattenResponse(JSON.parse(text));
+        Object.assign(state, flat);
+        const authHeader = resolveAuthHeader(flat);
+        if (authHeader) state['_authHeader'] = authHeader;
+      } catch { /* not JSON */ }
+    } catch (err) {
+      await emitEvent(scanId, 'info', `Bootstrap login failed: ${(err as Error).message}`);
+    }
+  }
+
+  if (state['_authHeader']) {
+    await emitEvent(scanId, 'success', `Bootstrap auth: token captured`);
+  } else {
+    await emitEvent(scanId, 'info', 'Bootstrap auth: no token captured — will run unauthenticated tests');
+  }
+
+  const capturedKeys = Object.keys(state).filter((k) => !k.startsWith('_'));
+  if (capturedKeys.length > 0) {
+    await emitEvent(scanId, 'info', `Bootstrap captured: ${capturedKeys.slice(0, 10).join(', ')}`);
+  }
+
+  return state;
+}
+
 // ─── Step 1: Generate attack plan ────────────────────────────────────────────
 
 /** Replace Express/FastAPI path params with safe test values so the script can call real URLs. */
@@ -102,6 +239,8 @@ Output ONLY a valid JSON array of attack vectors. Each element must match this s
 }
 
 CRITICAL: "test_path" must have all :param placeholders replaced with real test values (e.g. /users/:id → /users/1).
+CRITICAL: When an endpoint lists [body fields: ...], use EXACTLY those field names in your payloads — do not guess or invent alternative names.
+CRITICAL: When an endpoint lists [query params: ...], use EXACTLY those param names in query strings.
 No markdown, no explanation — only the JSON array.`;
 
 function parseVectors(text: string): AttackVector[] {
@@ -148,11 +287,12 @@ async function generateAttackPlan(
       .map((e) => {
         const testPath = substituteParams(e.path);
         const paramNote = testPath !== e.path ? ` (test as: ${testPath})` : '';
-        return (
-          `${e.method} ${e.path}${paramNote}` +
-          (e.auth ? '' : ' [NO AUTH]') +
-          (e.risk_hints.length ? ` [risks: ${e.risk_hints.join(', ')}]` : '')
-        );
+        let line = `${e.method} ${e.path}${paramNote}`;
+        if (!e.auth) line += ' [NO AUTH]';
+        if (e.risk_hints.length) line += ` [risks: ${e.risk_hints.join(', ')}]`;
+        if (e.body_fields.length) line += ` [body fields: ${e.body_fields.join(', ')}]`;
+        if (e.query_params.length) line += ` [query params: ${e.query_params.join(', ')}]`;
+        return line;
       })
       .join('\n');
 
@@ -193,19 +333,22 @@ async function generateAttackPlan(
 
 // ─── Step 2: Generate attack script ──────────────────────────────────────────
 
-function buildAttackScript(vectorsPath: string, targetBaseUrl: string): string {
+function buildAttackScript(vectorsPath: string, targetBaseUrl: string, statePath: string): string {
   // Fixed execution template — no LLM call needed, no token limit issues.
-  // Vectors live in a JSON sidecar file; vuln_condition is eval'd via new Function.
+  // Vectors and bootstrap state live in JSON sidecar files.
   return `
 import { readFileSync } from 'fs';
 
 const BASE_URL = ${JSON.stringify(targetBaseUrl)};
 const vectors = JSON.parse(readFileSync(${JSON.stringify(vectorsPath)}, 'utf8'));
+const state = JSON.parse(readFileSync(${JSON.stringify(statePath)}, 'utf8'));
 
 for (const vector of vectors) {
   for (const payload of vector.payloads) {
     const headers = Object.assign({}, payload.headers ?? {});
-    if (payload.auth === 'bearer') headers['Authorization'] = 'Bearer test-token';
+    if (payload.auth === 'bearer' && state._authHeader) {
+      headers['Authorization'] = state._authHeader;
+    }
 
     const url = BASE_URL + vector.test_path + (payload.query ?? '');
     let status = 0;
@@ -258,14 +401,17 @@ for (const vector of vectors) {
 async function executeScript(
   vectors: AttackVector[],
   targetBaseUrl: string,
+  state: BootstrapState,
   scanId: string,
 ): Promise<AttackResult[]> {
   await emitEvent(scanId, 'info', `Executing ${vectors.length} attack vectors…`);
 
   const vectorsPath = join(tmpdir(), `vulnscout-${scanId}.json`);
+  const statePath = join(tmpdir(), `vulnscout-${scanId}-state.json`);
   const scriptPath = join(tmpdir(), `vulnscout-${scanId}.mjs`);
   await writeFile(vectorsPath, JSON.stringify(vectors), 'utf8');
-  await writeFile(scriptPath, buildAttackScript(vectorsPath, targetBaseUrl), 'utf8');
+  await writeFile(statePath, JSON.stringify(state), 'utf8');
+  await writeFile(scriptPath, buildAttackScript(vectorsPath, targetBaseUrl, statePath), 'utf8');
 
   return new Promise((resolve, reject) => {
     const results: AttackResult[] = [];
@@ -313,6 +459,7 @@ async function executeScript(
     child.on('close', async (code) => {
       await unlink(scriptPath).catch(() => {});
       await unlink(vectorsPath).catch(() => {});
+      await unlink(statePath).catch(() => {});
       const vulnCount = results.filter((r) => r.vulnerable).length;
       await emitEvent(
         scanId,
@@ -325,6 +472,7 @@ async function executeScript(
     child.on('error', async (err) => {
       await unlink(scriptPath).catch(() => {});
       await unlink(vectorsPath).catch(() => {});
+      await unlink(statePath).catch(() => {});
       reject(err);
     });
   });
@@ -412,17 +560,20 @@ export async function runAttacker(options: AttackerOptions): Promise<AttackerRes
     `Attacker ready · profile: ${attackProfile} · ${knownEndpoints.length} endpoints`,
   );
 
-  // 1. Generate attack plan
+  // 1. Bootstrap auth (register + login to capture real token/state)
+  const bootstrapState = await bootstrapAuth(knownEndpoints, targetBaseUrl, scanId);
+
+  // 2. Generate attack plan
   const vectors = await generateAttackPlan(knownEndpoints, attackProfile, scanId);
   if (!vectors.length) {
     await emitEvent(scanId, 'info', 'No attack vectors generated');
     return { findingsCount: 0, requestsFired: 0 };
   }
 
-  // 2. Execute
+  // 3. Execute
   let results: AttackResult[] = [];
   try {
-    results = await executeScript(vectors, targetBaseUrl, scanId);
+    results = await executeScript(vectors, targetBaseUrl, bootstrapState, scanId);
   } catch (err) {
     await emitEvent(scanId, 'error', `Script execution failed: ${(err as Error).message}`);
   }

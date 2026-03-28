@@ -244,6 +244,7 @@ export async function extractRoutesFromFile(filePath: string, mountPrefix = ''):
       const handlerSource = extractHandlerSource(source, match.index);
       const riskHints = detectRiskHints(handlerSource, normPath, method);
       const authMiddleware = detectAuthMiddleware(source, match.index);
+      const { bodyFields, queryParams } = extractInputFields(handlerSource);
 
       endpoints.push({
         method,
@@ -253,11 +254,90 @@ export async function extractRoutesFromFile(filePath: string, mountPrefix = ''):
         riskHints,
         authMiddleware,
         handlerSource: handlerSource.slice(0, 500),
+        bodyFields,
+        queryParams,
       });
     }
   }
 
   return deduplicateEndpoints(endpoints);
+}
+
+// ─── Input field extraction ────────────────────────────────────────────────────
+
+export function extractInputFields(source: string): { bodyFields: string[]; queryParams: string[] } {
+  const body = new Set<string>();
+  const query = new Set<string>();
+
+  // req.body.field
+  for (const m of source.matchAll(/req\.body\.([a-zA-Z_$][a-zA-Z0-9_$]*)/g))
+    body.add(m[1]);
+
+  // req.body['field'] or req.body["field"]
+  for (const m of source.matchAll(/req\.body\[['"]([^'"]+)['"]\]/g))
+    body.add(m[1]);
+
+  // const/let/var { field1, field2 } = req.body
+  for (const m of source.matchAll(/(?:const|let|var)\s*\{([^}]+)\}\s*=\s*req\.body/g)) {
+    for (const part of m[1].split(',')) {
+      const field = part.trim().split(/[=:]/)[0].trim();
+      if (field && /^[a-zA-Z_$]/.test(field)) body.add(field);
+    }
+  }
+
+  // hasProperties(req.body, "f1", "f2", ...)  — any argument-list pattern
+  for (const m of source.matchAll(/hasPropert\w*\s*\(\s*req\.body\s*,([^)]+)\)/g)) {
+    for (const part of m[1].split(',')) {
+      const field = part.trim().replace(/^['"`]|['"`]$/g, '');
+      if (field && /^[a-zA-Z_$]/.test(field)) body.add(field);
+    }
+  }
+
+  // Zod: z.object({ field: z.string(), ... })
+  for (const m of source.matchAll(/z\.object\s*\(\s*\{([^}]+)\}/g)) {
+    for (const part of m[1].split(',')) {
+      const field = part.trim().split(':')[0].trim();
+      if (field && /^[a-zA-Z_$]/.test(field)) body.add(field);
+    }
+  }
+
+  // Joi / yup: schema.keys({ field: ... }) or object({ field: ... })
+  for (const m of source.matchAll(/(?:keys|shape|object)\s*\(\s*\{([^}]+)\}/g)) {
+    for (const part of m[1].split(',')) {
+      const field = part.trim().split(':')[0].trim();
+      if (field && /^[a-zA-Z_$]/.test(field)) body.add(field);
+    }
+  }
+
+  // Python FastAPI/Flask: request.json.get('field') / request.form.get('field')
+  for (const m of source.matchAll(/request\.(?:json|form|data)\.get\s*\(\s*['"]([^'"]+)['"]/g))
+    body.add(m[1]);
+
+  // Python pydantic model fields: field: type  (inside a class body)
+  for (const m of source.matchAll(/^\s{4}([a-zA-Z_]\w*)\s*:\s*(?:str|int|float|bool|Optional)/gm))
+    body.add(m[1]);
+
+  // req.query.field
+  for (const m of source.matchAll(/req\.query\.([a-zA-Z_$][a-zA-Z0-9_$]*)/g))
+    query.add(m[1]);
+
+  // req.query['field']
+  for (const m of source.matchAll(/req\.query\[['"]([^'"]+)['"]\]/g))
+    query.add(m[1]);
+
+  // const { field } = req.query
+  for (const m of source.matchAll(/(?:const|let|var)\s*\{([^}]+)\}\s*=\s*req\.query/g)) {
+    for (const part of m[1].split(',')) {
+      const field = part.trim().split(/[=:]/)[0].trim();
+      if (field && /^[a-zA-Z_$]/.test(field)) query.add(field);
+    }
+  }
+
+  // Python: request.args.get('field')
+  for (const m of source.matchAll(/request\.args\.get\s*\(\s*['"]([^'"]+)['"]/g))
+    query.add(m[1]);
+
+  return { bodyFields: [...body], queryParams: [...query] };
 }
 
 // ─── Risk detection ────────────────────────────────────────────────────────────

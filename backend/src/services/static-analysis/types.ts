@@ -21,6 +21,8 @@ export interface Endpoint {
   riskHints: RiskHint[];
   authMiddleware: string[];  // middleware names detected on this route
   handlerSource?: string;    // up to 500 chars of the handler body for agent context
+  bodyFields: string[];      // req.body field names extracted from handler
+  queryParams: string[];     // req.query param names extracted from handler
 }
 
 export interface StaticAnalysisResult {

@@ -91,6 +91,8 @@ export function formatEndpointsForAgent(result: StaticAnalysisResult): AgentEndp
     path: e.path,
     risk_hints: e.riskHints,
     auth: e.authMiddleware.length > 0,
+    body_fields: e.bodyFields,
+    query_params: e.queryParams,
   }));
 }
 
@@ -99,6 +101,8 @@ export interface AgentEndpoint {
   path: string;
   risk_hints: string[];
   auth: boolean;
+  body_fields: string[];
+  query_params: string[];
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

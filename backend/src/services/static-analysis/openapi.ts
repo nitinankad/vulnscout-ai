@@ -78,6 +78,19 @@ function convertOpenApiToEndpoints(doc: OpenApiDoc, specFile: string): Endpoint[
 
       const riskHints = detectOpenApiRisks(routePath, method, operation, hasGlobalSecurity);
 
+      // Extract parameter names from OpenAPI spec
+      const op = operation as Record<string, unknown>;
+      const params = (op['parameters'] as Array<Record<string, unknown>> | undefined) ?? [];
+      const bodySchema = (op['requestBody'] as Record<string, unknown> | undefined);
+      const bodyContent = bodySchema?.['content'] as Record<string, unknown> | undefined;
+      const jsonSchema = (bodyContent?.['application/json'] as Record<string, unknown> | undefined);
+      const schemaProps = ((jsonSchema?.['schema'] as Record<string, unknown> | undefined)?.['properties'] as Record<string, unknown> | undefined);
+      const bodyFields = schemaProps ? Object.keys(schemaProps) : [];
+      const queryParams = params
+        .filter((p) => p['in'] === 'query')
+        .map((p) => String(p['name'] ?? ''))
+        .filter(Boolean);
+
       endpoints.push({
         method,
         path: normaliseOpenApiPath(routePath),
@@ -90,6 +103,8 @@ function convertOpenApiToEndpoints(doc: OpenApiDoc, specFile: string): Endpoint[
             ? ['global_security_scheme']
             : [],
         handlerSource: operation.summary ?? operation.operationId ?? '',
+        bodyFields,
+        queryParams,
       });
     }
   }
