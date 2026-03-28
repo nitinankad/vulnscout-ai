@@ -41,12 +41,15 @@ interface Row {
   scanCount: number
 }
 
+const PAGE_SIZE = 10
+
 export function Services() {
   const navigate = useNavigate()
   const [search, setSearch] = useState('')
   const [rows, setRows] = useState<Row[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [page, setPage] = useState(0)
 
   useEffect(() => {
     Promise.all([api.services.list(), api.scans.list()])
@@ -56,6 +59,13 @@ export function Services() {
             .filter((s) => s.serviceId === svc.id)
             .sort((a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime())
           return { service: svc, latestScan: svcScans[0] ?? null, scanCount: svcScans.length }
+        })
+        // Sort by most recent scan first; never-scanned services go to the bottom
+        built.sort((a, b) => {
+          if (!a.latestScan && !b.latestScan) return 0
+          if (!a.latestScan) return 1
+          if (!b.latestScan) return -1
+          return new Date(b.latestScan.startedAt).getTime() - new Date(a.latestScan.startedAt).getTime()
         })
         setRows(built)
       })
@@ -68,6 +78,9 @@ export function Services() {
       service.name.toLowerCase().includes(search.toLowerCase()) ||
       service.source.toLowerCase().includes(search.toLowerCase()),
   )
+
+  const totalPages = Math.ceil(filtered.length / PAGE_SIZE)
+  const paginated = filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE)
 
   return (
     <div className="p-8">
@@ -98,7 +111,7 @@ export function Services() {
           className="w-full bg-card border border-border rounded-lg pl-8 pr-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary/50"
           placeholder="Search services…"
           value={search}
-          onChange={(e) => setSearch(e.target.value)}
+          onChange={(e) => { setSearch(e.target.value); setPage(0) }}
         />
       </div>
 
@@ -120,7 +133,7 @@ export function Services() {
 
         {!loading && !error && (
           <div className="divide-y divide-border">
-            {filtered.map(({ service, latestScan, scanCount }) => (
+            {paginated.map(({ service, latestScan, scanCount }) => (
               <div
                 key={service.id}
                 className="grid grid-cols-[1fr_auto_auto_auto] items-center px-5 py-4 hover:bg-white/[0.02] transition-colors cursor-pointer group"
@@ -206,6 +219,44 @@ export function Services() {
                 )}
               </div>
             )}
+          </div>
+        )}
+
+        {/* Pagination */}
+        {!loading && !error && totalPages > 1 && (
+          <div className="flex items-center justify-between px-5 py-3 border-t border-border">
+            <p className="text-xs text-muted-foreground">
+              {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, filtered.length)} of {filtered.length}
+            </p>
+            <div className="flex items-center gap-1">
+              <button
+                disabled={page === 0}
+                onClick={() => setPage(page - 1)}
+                className="px-2.5 py-1 text-xs rounded-md border border-border text-muted-foreground hover:text-foreground hover:border-border/80 transition-colors disabled:opacity-30 disabled:pointer-events-none"
+              >
+                ←
+              </button>
+              {Array.from({ length: totalPages }, (_, i) => (
+                <button
+                  key={i}
+                  onClick={() => setPage(i)}
+                  className={`w-7 h-7 text-xs rounded-md border transition-colors ${
+                    i === page
+                      ? 'bg-primary/10 border-primary/30 text-primary'
+                      : 'border-border text-muted-foreground hover:text-foreground hover:border-border/80'
+                  }`}
+                >
+                  {i + 1}
+                </button>
+              ))}
+              <button
+                disabled={page === totalPages - 1}
+                onClick={() => setPage(page + 1)}
+                className="px-2.5 py-1 text-xs rounded-md border border-border text-muted-foreground hover:text-foreground hover:border-border/80 transition-colors disabled:opacity-30 disabled:pointer-events-none"
+              >
+                →
+              </button>
+            </div>
           </div>
         )}
       </div>
