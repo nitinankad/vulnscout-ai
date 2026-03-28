@@ -1,4 +1,6 @@
 import { redisClient } from '../queues/redis';
+import { db } from '../db';
+import { scanEvents } from '../db/schema';
 
 export type ScanEventType = 'info' | 'success' | 'error' | 'critical' | 'high' | 'medium';
 
@@ -10,8 +12,8 @@ export interface ScanEvent {
 }
 
 /**
- * Publishes a scan event to the Redis pub/sub channel for that scan.
- * The frontend subscribes to scan:{scanId} via Socket.IO and streams these to the browser.
+ * Publishes a scan event to the Redis pub/sub channel for that scan
+ * AND persists it to the database so it can be retrieved after the scan completes.
  */
 export async function emitEvent(
   scanId: string,
@@ -19,6 +21,12 @@ export async function emitEvent(
   message: string,
   done = false,
 ): Promise<void> {
-  const event: ScanEvent = { type, message, timestamp: new Date().toISOString(), done };
+  const timestamp = new Date().toISOString();
+  const event: ScanEvent = { type, message, timestamp, done };
+
+  // Persist to DB (fire-and-forget — never block the scan on a DB write failure)
+  db.insert(scanEvents).values({ scanId, type, message }).catch(() => {});
+
+  // Broadcast to live subscribers via Redis pub/sub
   await redisClient.publish(`scan:${scanId}`, JSON.stringify(event));
 }

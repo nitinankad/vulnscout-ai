@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { eq, and } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../db';
-import { scans, findings, services, scanRequests } from '../db/schema';
+import { scans, findings, services, scanRequests, scanEvents } from '../db/schema';
 import { scanQueue } from '../queues';
 import { requireAuth } from '../middleware/requireAuth';
 import { redisClient } from '../queues/redis';
@@ -127,6 +127,28 @@ router.get('/:id/requests', async (req, res) => {
     .orderBy(scanRequests.createdAt);
 
   res.json(requests);
+});
+
+// GET /scans/:id/events
+router.get('/:id/events', async (req, res) => {
+  const [scan] = await db
+    .select({ id: scans.id })
+    .from(scans)
+    .where(and(eq(scans.id, req.params.id), eq(scans.userId, req.user!.userId)))
+    .limit(1);
+
+  if (!scan) {
+    res.status(404).json({ error: 'Scan not found' });
+    return;
+  }
+
+  const events = await db
+    .select()
+    .from(scanEvents)
+    .where(eq(scanEvents.scanId, req.params.id))
+    .orderBy(scanEvents.createdAt);
+
+  res.json(events);
 });
 
 // GET /scans

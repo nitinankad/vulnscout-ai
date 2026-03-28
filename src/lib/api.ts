@@ -154,6 +154,8 @@ export const api = {
 
     requests: (id: string) => request<ScanRequest[]>(`/scans/${id}/requests`),
 
+    events: (id: string) => request<{ id: string; scanId: string; type: string; message: string; createdAt: string }[]>(`/scans/${id}/events`),
+
     create: (data: { serviceId: string; attackProfile: string }) =>
       request<Scan>('/scans', {
         method: 'POST',

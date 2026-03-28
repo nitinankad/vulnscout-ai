@@ -495,10 +495,16 @@ export function ScanDetail() {
   useEffect(() => {
     if (!isRealScan || !id) { setScanDataLoading(false); return; }
     api.scans.get(id)
-      .then((data) => {
+      .then(async (data) => {
         setScanData(data);
         if (data.status === 'completed' || data.status === 'failed') {
           setDone(true);
+          // Load persisted events from DB for completed/failed scans
+          try {
+            const stored = await api.scans.events(id);
+            setEvents(stored.map((e) => ({ text: e.message, type: e.type as LiveEvent['type'], ts: e.createdAt })));
+            if (stored.length > 0) setScanLogOpen(true);
+          } catch { /* ignore */ }
         }
       })
       .catch(console.error)
@@ -857,20 +863,18 @@ export function ScanDetail() {
 
       {/* Scan execution log */}
       {events.length > 0 && (
-        <div className="mt-6 bg-[oklch(0.07_0.01_200)] border border-border rounded-xl overflow-hidden">
+        <div className="mt-6 border border-border rounded-xl overflow-hidden">
           <button
-            className="w-full flex items-center justify-between px-4 py-3 hover:bg-white/[0.02] transition-colors"
+            className="w-full flex items-center justify-between px-4 py-3 bg-muted/10 hover:bg-muted/20 transition-colors"
             onClick={() => setScanLogOpen((v) => !v)}
           >
             <div className="flex items-center gap-2">
-              <svg className="w-3.5 h-3.5 text-muted-foreground" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-              </svg>
-              <span className="text-xs font-medium text-muted-foreground">Scan execution log</span>
-              <span className="text-[10px] text-muted-foreground/50 bg-muted/20 border border-border px-1.5 py-0.5 rounded">{events.length} events</span>
+              <span className="w-1.5 h-1.5 rounded-full bg-primary/60 flex-shrink-0" />
+              <span className="text-xs font-medium text-foreground">Execution log</span>
+              <span className="text-[10px] text-muted-foreground/60 tabular-nums">{events.length} events</span>
             </div>
             <svg
-              className={`w-4 h-4 text-muted-foreground transition-transform ${scanLogOpen ? 'rotate-180' : ''}`}
+              className={`w-3.5 h-3.5 text-muted-foreground transition-transform ${scanLogOpen ? 'rotate-180' : ''}`}
               fill="none" viewBox="0 0 24 24" stroke="currentColor"
             >
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
@@ -878,13 +882,13 @@ export function ScanDetail() {
           </button>
 
           {scanLogOpen && (
-            <div className="border-t border-border p-4 space-y-1.5 font-mono text-xs max-h-72 overflow-y-auto">
+            <div className="border-t border-border bg-[oklch(0.06_0.01_200)] p-4 font-mono text-xs max-h-96 overflow-y-auto space-y-1">
               {events.map((ev, i) => (
-                <div key={i} className="flex items-start gap-2">
-                  <span className="text-muted-foreground/40 flex-shrink-0 select-none">
+                <div key={i} className="flex items-start gap-3 leading-relaxed">
+                  <span className="text-muted-foreground/30 flex-shrink-0 select-none whitespace-nowrap">
                     {new Date(ev.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
                   </span>
-                  <span className={EVENT_COLOR[ev.type] ?? 'text-muted-foreground'}>{ev.text}</span>
+                  <span className={`flex-1 ${EVENT_COLOR[ev.type] ?? 'text-muted-foreground'}`}>{ev.text}</span>
                 </div>
               ))}
             </div>

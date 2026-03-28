@@ -72,6 +72,14 @@ export const scanRequests = pgTable('scan_requests', {
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 
+export const scanEvents = pgTable('scan_events', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  scanId: uuid('scan_id').references(() => scans.id, { onDelete: 'cascade' }).notNull(),
+  type: text('type').notNull(),
+  message: text('message').notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
 export const findings = pgTable('findings', {
   id: uuid('id').primaryKey().defaultRandom(),
   scanId: uuid('scan_id').references(() => scans.id, { onDelete: 'cascade' }).notNull(),
