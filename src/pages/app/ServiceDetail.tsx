@@ -34,6 +34,8 @@ export function ServiceDetail() {
   const [scans, setScans] = useState<Scan[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const [deleting, setDeleting] = useState(false)
 
   useEffect(() => {
     Promise.all([api.services.list(), api.scans.list()])
@@ -117,16 +119,61 @@ export function ServiceDetail() {
           </div>
         </div>
 
-        <Button
-          className="bg-primary text-primary-foreground hover:bg-primary/90 glow-green h-9 font-medium text-sm"
-          onClick={() => navigate('/app/scans/new')}
-        >
-          <svg className="w-4 h-4 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 4v16m8-8H4" />
-          </svg>
-          Run scan
-        </Button>
+        <div className="flex items-center gap-2">
+          <button
+            title="Delete service"
+            className="w-9 h-9 flex items-center justify-center rounded-md border border-border text-muted-foreground hover:text-destructive hover:border-destructive/40 transition-colors"
+            onClick={() => setConfirmDelete(true)}
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.75} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+            </svg>
+          </button>
+          <Button
+            className="bg-primary text-primary-foreground hover:bg-primary/90 glow-green h-9 font-medium text-sm"
+            onClick={() => navigate('/app/scans/new')}
+          >
+            <svg className="w-4 h-4 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 4v16m8-8H4" />
+            </svg>
+            Run scan
+          </Button>
+        </div>
       </div>
+
+      {/* Delete confirmation banner */}
+      {confirmDelete && (
+        <div className="mb-6 flex items-center justify-between gap-4 px-4 py-3 rounded-lg border border-destructive/30 bg-destructive/5">
+          <p className="text-sm text-foreground">
+            Delete <span className="font-medium">{service.name}</span> and all {scans.length} scan{scans.length !== 1 ? 's' : ''}? This cannot be undone.
+          </p>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <button
+              className="h-8 px-3 text-xs font-medium rounded-md border border-border text-muted-foreground hover:text-foreground transition-colors"
+              onClick={() => setConfirmDelete(false)}
+              disabled={deleting}
+            >
+              Cancel
+            </button>
+            <button
+              className="h-8 px-3 text-xs font-medium rounded-md bg-destructive text-white hover:bg-destructive/90 transition-colors disabled:opacity-50"
+              disabled={deleting}
+              onClick={async () => {
+                setDeleting(true)
+                try {
+                  await api.services.delete(id!)
+                  navigate('/app/services')
+                } catch {
+                  setDeleting(false)
+                  setConfirmDelete(false)
+                }
+              }}
+            >
+              {deleting ? 'Deleting…' : 'Delete service'}
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Summary strip */}
       {scans.length > 0 && (

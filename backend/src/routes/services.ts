@@ -27,7 +27,7 @@ router.get('/', async (req, res) => {
   res.json(rows);
 });
 
-// POST /services
+// POST /services — find-or-create: returns existing service if same source+branch already exists for this user
 router.post('/', async (req, res) => {
   const parsed = createSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -35,6 +35,35 @@ router.post('/', async (req, res) => {
     return;
   }
   const { name, source_type, source, branch, env_vars } = parsed.data;
+
+  // Check for an existing service with the same source URL and branch
+  const conditions = [
+    eq(services.userId, req.user!.userId),
+    eq(services.source, source),
+  ];
+  if (branch) conditions.push(eq(services.branch, branch));
+
+  const [existing] = await db
+    .select()
+    .from(services)
+    .where(and(...conditions))
+    .limit(1);
+
+  if (existing) {
+    // If caller is providing new env vars, merge them in
+    if (env_vars && Object.keys(env_vars).length > 0) {
+      const merged = { ...(existing.envVars ?? {}), ...env_vars } as Record<string, string>;
+      const [updated] = await db
+        .update(services)
+        .set({ envVars: merged })
+        .where(eq(services.id, existing.id))
+        .returning();
+      res.status(200).json(updated);
+    } else {
+      res.status(200).json(existing);
+    }
+    return;
+  }
 
   const [service] = await db
     .insert(services)
