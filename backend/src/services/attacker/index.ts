@@ -8,6 +8,8 @@ import { db } from '../../db';
 import { findings, scans, scanRequests } from '../../db/schema';
 import { emitEvent } from '../../lib/events';
 import type { AgentEndpoint } from '../static-analysis';
+import { PAYLOAD_LIBRARY, resolvePayloads, SUPPORTED_VULN_CLASSES } from './payloads';
+import type { PayloadSpec } from './payloads';
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -25,6 +27,24 @@ export interface AttackerResult {
   requestsFired: number;
 }
 
+/**
+ * What the LLM returns: endpoint → vuln class mapping only.
+ * No payloads, no vuln_condition — those come from the static library.
+ */
+interface AttackMapping {
+  endpoint: string;
+  test_path: string;
+  method: string;
+  test_name: string;
+  vuln_class: string;
+  severity: 'critical' | 'high' | 'medium' | 'low' | 'info';
+  description: string;
+  fix_suggestion: string;
+  cwe_id: string;
+  owasp_category: string;
+}
+
+/** Fully hydrated attack vector ready for execution. */
 interface AttackVector {
   endpoint: string;
   test_path: string;
@@ -33,12 +53,7 @@ interface AttackVector {
   vuln_class: string;
   severity: 'critical' | 'high' | 'medium' | 'low' | 'info';
   description: string;
-  payloads: Array<{
-    headers?: Record<string, string>;
-    body?: string;
-    query?: string;
-    auth?: 'none' | 'bearer';
-  }>;
+  payloads: PayloadSpec[];
   vuln_condition: string;
   fix_suggestion: string;
   cwe_id: string;
@@ -64,9 +79,10 @@ interface AttackResult {
 // ─── Bootstrap auth ───────────────────────────────────────────────────────────
 
 /**
- * Flexible bootstrap state: whatever key-value pairs were captured from auth responses.
- * Special key `_authHeader` holds the full Authorization header value (e.g. "Bearer eyJ...")
- * that the attack script should use for bearer-authenticated requests.
+ * Flexible bootstrap state. Special keys:
+ * - `_authHeader`:      user A's full Authorization header value ("Bearer eyJ...")
+ * - `_userBAuthHeader`: user B's Authorization header value (for IDOR cross-user tests)
+ * All other keys: flattened response fields from register/login calls.
  */
 type BootstrapState = Record<string, string>;
 
@@ -89,6 +105,24 @@ async function generateTestBody(ep: AgentEndpoint): Promise<Record<string, unkno
     // fall through to empty
   }
   return {};
+}
+
+/** Append a suffix to identifier-like fields to ensure unique credentials across test users. */
+function makeUnique(body: Record<string, unknown>, suffix: string): Record<string, unknown> {
+  const out = { ...body };
+  for (const [k, v] of Object.entries(out)) {
+    if (typeof v === 'string') {
+      if (/email/i.test(k)) {
+        const atIdx = v.indexOf('@');
+        out[k] = atIdx > 0
+          ? v.slice(0, atIdx) + '+' + suffix + v.slice(atIdx)
+          : v + suffix + '@test.com';
+      } else if (/^(username|user|name|login|handle)$/i.test(k)) {
+        out[k] = v + '_' + suffix;
+      }
+    }
+  }
+  return out;
 }
 
 /** Flatten a JSON object into key=value pairs for state capture (depth 2, strings/numbers only). */
@@ -114,11 +148,64 @@ function resolveAuthHeader(flat: Record<string, string>): string | null {
   ];
   for (const [k, v] of Object.entries(flat)) {
     if (TOKEN_PATTERNS.some((re) => re.test(k)) && v.length > 8) {
-      // Looks like a JWT if it has dots; otherwise treat as opaque bearer token
       return v.startsWith('Bearer ') ? v : `Bearer ${v}`;
     }
   }
   return null;
+}
+
+/** Register + login one test user. Returns { authHeader, flat } or null on failure. */
+async function bootstrapOneUser(
+  registerEp: AgentEndpoint | undefined,
+  loginEp: AgentEndpoint | undefined,
+  targetBaseUrl: string,
+  scanId: string,
+  suffix: string,
+): Promise<{ authHeader: string; flat: Record<string, string> } | null> {
+  let flat: Record<string, string> = {};
+
+  if (registerEp) {
+    const rawBody = await generateTestBody(registerEp);
+    const body = makeUnique(rawBody, suffix);
+    try {
+      const res = await fetch(targetBaseUrl + substituteParams(registerEp.path), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(8000),
+      });
+      const text = await res.text();
+      await emitEvent(scanId, 'info', `Bootstrap register [${suffix}] → ${res.status}`);
+      try { Object.assign(flat, flattenResponse(JSON.parse(text))); } catch { /* not JSON */ }
+    } catch (err) {
+      await emitEvent(scanId, 'info', `Bootstrap register [${suffix}] failed: ${(err as Error).message}`);
+    }
+  }
+
+  if (loginEp) {
+    const rawBody = await generateTestBody(loginEp);
+    const body = makeUnique(rawBody, suffix);
+    try {
+      const res = await fetch(targetBaseUrl + substituteParams(loginEp.path), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(8000),
+      });
+      const text = await res.text();
+      await emitEvent(scanId, 'info', `Bootstrap login [${suffix}] → ${res.status}`);
+      try {
+        const loginFlat = flattenResponse(JSON.parse(text));
+        Object.assign(flat, loginFlat);
+      } catch { /* not JSON */ }
+    } catch (err) {
+      await emitEvent(scanId, 'info', `Bootstrap login [${suffix}] failed: ${(err as Error).message}`);
+    }
+  }
+
+  const authHeader = resolveAuthHeader(flat);
+  if (!authHeader) return null;
+  return { authHeader, flat };
 }
 
 async function bootstrapAuth(
@@ -136,58 +223,28 @@ async function bootstrapAuth(
     return state;
   }
 
-  // ── Register ────────────────────────────────────────────────────────────────
-  if (registerEp) {
-    const body = await generateTestBody(registerEp);
-    await emitEvent(scanId, 'info', `Bootstrap: registering test user at ${registerEp.path}`);
-    try {
-      const res = await fetch(targetBaseUrl + substituteParams(registerEp.path), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-        signal: AbortSignal.timeout(8000),
-      });
-      const text = await res.text();
-      await emitEvent(scanId, 'info', `Bootstrap register → ${res.status}`);
-      try {
-        const flat = flattenResponse(JSON.parse(text));
-        Object.assign(state, flat);
-        const authHeader = resolveAuthHeader(flat);
-        if (authHeader && !state['_authHeader']) state['_authHeader'] = authHeader;
-      } catch { /* not JSON */ }
-    } catch (err) {
-      await emitEvent(scanId, 'info', `Bootstrap register failed: ${(err as Error).message}`);
-    }
-  }
+  const suffixA = Math.random().toString(36).slice(2, 8);
+  const suffixB = Math.random().toString(36).slice(2, 8);
 
-  // ── Login (always attempt; overwrites state with fresher values) ─────────────
-  if (loginEp) {
-    const body = await generateTestBody(loginEp);
-    await emitEvent(scanId, 'info', `Bootstrap: logging in at ${loginEp.path}`);
-    try {
-      const res = await fetch(targetBaseUrl + substituteParams(loginEp.path), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-        signal: AbortSignal.timeout(8000),
-      });
-      const text = await res.text();
-      await emitEvent(scanId, 'info', `Bootstrap login → ${res.status}`);
-      try {
-        const flat = flattenResponse(JSON.parse(text));
-        Object.assign(state, flat);
-        const authHeader = resolveAuthHeader(flat);
-        if (authHeader) state['_authHeader'] = authHeader;
-      } catch { /* not JSON */ }
-    } catch (err) {
-      await emitEvent(scanId, 'info', `Bootstrap login failed: ${(err as Error).message}`);
-    }
-  }
-
-  if (state['_authHeader']) {
-    await emitEvent(scanId, 'success', `Bootstrap auth: token captured`);
+  // User A — primary auth user
+  await emitEvent(scanId, 'info', 'Bootstrap: creating test user A…');
+  const userA = await bootstrapOneUser(registerEp, loginEp, targetBaseUrl, scanId, suffixA);
+  if (userA) {
+    state['_authHeader'] = userA.authHeader;
+    Object.assign(state, userA.flat);
+    await emitEvent(scanId, 'success', 'Bootstrap user A: token captured');
   } else {
-    await emitEvent(scanId, 'info', 'Bootstrap auth: no token captured — will run unauthenticated tests');
+    await emitEvent(scanId, 'info', 'Bootstrap user A: no token captured — unauthenticated tests only');
+  }
+
+  // User B — second account for IDOR cross-user tests
+  await emitEvent(scanId, 'info', 'Bootstrap: creating test user B (IDOR)…');
+  const userB = await bootstrapOneUser(registerEp, loginEp, targetBaseUrl, scanId, suffixB);
+  if (userB) {
+    state['_userBAuthHeader'] = userB.authHeader;
+    await emitEvent(scanId, 'success', 'Bootstrap user B: token captured');
+  } else {
+    await emitEvent(scanId, 'info', 'Bootstrap user B: no token — IDOR cross-user tests skipped');
   }
 
   const capturedKeys = Object.keys(state).filter((k) => !k.startsWith('_'));
@@ -198,7 +255,7 @@ async function bootstrapAuth(
   return state;
 }
 
-// ─── Step 1: Generate attack plan ────────────────────────────────────────────
+// ─── Step 1: Generate attack mappings ────────────────────────────────────────
 
 /** Replace Express/FastAPI path params with safe test values so the script can call real URLs. */
 function substituteParams(path: string): string {
@@ -220,69 +277,67 @@ const BATCH_SIZE: Record<'Quick' | 'Standard' | 'Aggressive', number> = {
   Aggressive: 8,
 };
 
-const ATTACK_PLAN_SYSTEM = `You are an expert API penetration tester. Given a list of API endpoints with risk hints extracted from their source code, generate a targeted attack plan.
+const ATTACK_PLAN_SYSTEM = `You are an expert API penetration tester. Given a list of API endpoints with risk hints extracted from their source code, generate a targeted attack mapping.
 
-Output ONLY a valid JSON array of attack vectors. Each element must match this shape exactly:
+Output ONLY a valid JSON array. Each element must match this shape exactly:
 {
   "endpoint": "/path/template",
   "test_path": "/path/with/real/values",
   "method": "GET|POST|PUT|PATCH|DELETE",
   "test_name": "short_snake_case_name",
-  "vuln_class": "sql_injection|auth_bypass|idor|broken_access_control|xss|ssrf|path_traversal|mass_assignment|csrf|rate_limiting",
+  "vuln_class": "one value from the supported list below",
   "severity": "critical|high|medium|low|info",
   "description": "what this test checks",
-  "payloads": [{ "headers": {}, "body": "string or null", "query": "?param=value or null", "auth": "none|bearer" }],
-  "vuln_condition": "JS expression using 'status' (number) and 'body' (string) — e.g. status === 200 && body.includes('token')",
   "fix_suggestion": "brief remediation advice",
   "cwe_id": "CWE-NNN",
   "owasp_category": "API N:2023 Category Name"
 }
 
+Supported vuln_class values (use ONLY these): ${SUPPORTED_VULN_CLASSES}
+Do NOT include "payloads" or "vuln_condition" fields — those are provided by the static payload library.
+
 CRITICAL: "test_path" must have all :param placeholders replaced with real test values (e.g. /users/:id → /users/1).
-CRITICAL: When an endpoint lists [body fields: ...], use EXACTLY those field names in your payloads — do not guess or invent alternative names.
-CRITICAL: When an endpoint lists [query params: ...], use EXACTLY those param names in query strings.
 No markdown, no explanation — only the JSON array.`;
 
-function parseVectors(text: string): AttackVector[] {
+function parseMappings(text: string): AttackMapping[] {
   const t = text.trim();
   try {
-    return JSON.parse(t) as AttackVector[];
+    return JSON.parse(t) as AttackMapping[];
   } catch {
     try {
       const match = t.match(/\[[\s\S]*\]/);
-      if (match) return JSON.parse(match[0]) as AttackVector[];
+      if (match) return JSON.parse(match[0]) as AttackMapping[];
     } catch {
       // truncated or malformed
     }
-    console.warn('[attacker] parseVectors failed, raw response preview:', t.slice(0, 300));
+    console.warn('[attacker] parseMappings failed, raw response preview:', t.slice(0, 300));
     return [];
   }
 }
 
-async function generateAttackPlan(
+async function generateAttackMappings(
   endpoints: AgentEndpoint[],
   profile: 'Quick' | 'Standard' | 'Aggressive',
   scanId: string,
-): Promise<AttackVector[]> {
-  await emitEvent(scanId, 'info', `Generating attack plan for ${endpoints.length} endpoints…`);
+): Promise<AttackMapping[]> {
+  await emitEvent(scanId, 'info', `Generating attack mappings for ${endpoints.length} endpoints…`);
 
   const profileInstruction =
     profile === 'Quick'
-      ? 'Generate 1 high-impact attack vector per endpoint that has risk hints. Skip endpoints with no risk hints.'
+      ? 'Generate 1 high-impact mapping per endpoint that has risk hints. Skip endpoints with no risk hints.'
       : profile === 'Standard'
-      ? 'Cover OWASP API Top 10. Generate 1–2 vectors per endpoint, prioritise risky ones.'
-      : 'Be thorough. Generate 2–3 vectors per endpoint covering all OWASP API Top 10 categories.';
+      ? 'Cover OWASP API Top 10. Generate 1–2 mappings per endpoint, prioritise risky ones.'
+      : 'Be thorough. Generate 2–3 mappings per endpoint covering all OWASP API Top 10 categories.';
 
-  // Batch to stay within output token limits per call
   const batchSize = BATCH_SIZE[profile];
   const batches: AgentEndpoint[][] = [];
   for (let i = 0; i < endpoints.length; i += batchSize) {
     batches.push(endpoints.slice(i, i + batchSize));
   }
 
-  await emitEvent(scanId, 'info', `Attack plan: ${batches.length} batches (concurrency: 3)…`);
+  await emitEvent(scanId, 'info', `Attack mappings: ${batches.length} batch(es) · concurrency 3`);
 
-  async function runBatch(batch: AgentEndpoint[], i: number): Promise<AttackVector[]> {
+  async function runBatch(batch: AgentEndpoint[], i: number): Promise<AttackMapping[]> {
     const endpointList = batch
       .map((e) => {
         const testPath = substituteParams(e.path);
@@ -304,38 +359,64 @@ async function generateAttackPlan(
     });
 
     const text = response.content[0].type === 'text' ? response.content[0].text : '[]';
-    const vectors = parseVectors(text);
-    if (vectors.length === 0) {
-      await emitEvent(scanId, 'info', `Batch ${i + 1} returned 0 vectors (stop_reason: ${response.stop_reason})`);
+    const mappings = parseMappings(text);
+    if (mappings.length === 0) {
+      await emitEvent(scanId, 'info', `Batch ${i + 1} returned 0 mappings (stop_reason: ${response.stop_reason})`);
     }
-    return vectors;
+    return mappings;
   }
 
-  // Run with capped concurrency (max 3 parallel Claude calls)
   const MAX_CONCURRENT = 3;
-  const results: AttackVector[][] = [];
+  const results: AttackMapping[][] = [];
   for (let i = 0; i < batches.length; i += MAX_CONCURRENT) {
     const chunk = batches.slice(i, i + MAX_CONCURRENT);
     const chunkResults = await Promise.all(chunk.map((batch, j) => runBatch(batch, i + j)));
     results.push(...chunkResults);
   }
 
-  const allVectors = results.flat();
-  await emitEvent(scanId, 'success', `Attack plan ready · ${allVectors.length} vectors`);
+  const allMappings = results.flat();
+  await emitEvent(scanId, 'success', `Attack mappings ready · ${allMappings.length} vectors`);
+  return allMappings;
+}
 
-  if (allVectors.length > 0) {
-    const lines = allVectors.map((v) => `  ${v.method.padEnd(6)} ${v.test_path}  [${v.vuln_class}]`).join('\n');
-    await emitEvent(scanId, 'info', `Targets:\n${lines}`);
+/**
+ * Merge LLM attack mappings with the static payload library.
+ * Unknown vuln_class values are dropped. Endpoint body/query context is used
+ * to produce context-aware payloads for injection attacks.
+ */
+function hydrateVectors(
+  mappings: AttackMapping[],
+  endpointMap: Map<string, AgentEndpoint>,
+): AttackVector[] {
+  const vectors: AttackVector[] = [];
+
+  for (const m of mappings) {
+    const config = PAYLOAD_LIBRARY[m.vuln_class];
+    if (!config) {
+      console.warn(`[attacker] Unknown vuln_class "${m.vuln_class}" — skipping`);
+      continue;
+    }
+
+    // Look up endpoint metadata for context-aware payload generation
+    const ep =
+      endpointMap.get(`${m.method}:${m.endpoint}`) ??
+      endpointMap.get(`${m.method}:${m.test_path}`);
+    const bodyFields = ep?.body_fields ?? [];
+    const queryParams = ep?.query_params ?? [];
+
+    vectors.push({
+      ...m,
+      payloads: resolvePayloads(config, bodyFields, queryParams),
+      vuln_condition: config.vuln_condition,
+    });
   }
 
-  return allVectors;
+  return vectors;
 }
 
 // ─── Step 2: Generate attack script ──────────────────────────────────────────
 
 function buildAttackScript(vectorsPath: string, targetBaseUrl: string, statePath: string): string {
-  // Fixed execution template — no LLM call needed, no token limit issues.
-  // Vectors and bootstrap state live in JSON sidecar files.
   return `
 import { readFileSync } from 'fs';
 
@@ -346,13 +427,16 @@ const state = JSON.parse(readFileSync(${JSON.stringify(statePath)}, 'utf8'));
 for (const vector of vectors) {
   for (const payload of vector.payloads) {
     const headers = Object.assign({}, payload.headers ?? {});
-    if (payload.auth === 'bearer' && state._authHeader) {
+    if (payload.auth === 'user_b' && state._userBAuthHeader) {
+      headers['Authorization'] = state._userBAuthHeader;
+    } else if (payload.auth === 'bearer' && state._authHeader) {
       headers['Authorization'] = state._authHeader;
     }
 
     const url = BASE_URL + vector.test_path + (payload.query ?? '');
     let status = 0;
     let body = '';
+    let responseHeaders = {};
 
     try {
       const res = await fetch(url, {
@@ -363,13 +447,18 @@ for (const vector of vectors) {
       });
       status = res.status;
       body = (await res.text()).slice(0, 1000);
+      responseHeaders = Object.fromEntries(
+        [...res.headers.entries()].map(([k, v]) => [k.toLowerCase(), v])
+      );
     } catch (err) {
       body = err.message;
     }
 
     let vulnerable = false;
     try {
-      vulnerable = !!new Function('status', 'body', 'return (' + vector.vuln_condition + ')')(status, body);
+      vulnerable = !!new Function('status', 'body', 'responseHeaders',
+        'return (' + vector.vuln_condition + ')'
+      )(status, body, responseHeaders);
     } catch { }
 
     const result = {
@@ -433,7 +522,6 @@ async function executeScript(
           const result: AttackResult = JSON.parse(trimmed);
           results.push(result);
 
-          // Emit live — method + endpoint + status, flag vulnerabilities
           const prefix = `${result.method} ${result.endpoint} → ${result.response.status}`;
           if (result.vulnerable) {
             emitEvent(
@@ -484,7 +572,6 @@ async function recordFindings(
   results: AttackResult[],
   scanId: string,
 ): Promise<number> {
-  // Save every request to the audit log
   for (const r of results) {
     await db.insert(scanRequests).values({
       scanId,
@@ -560,17 +647,33 @@ export async function runAttacker(options: AttackerOptions): Promise<AttackerRes
     `Attacker ready · profile: ${attackProfile} · ${knownEndpoints.length} endpoints`,
   );
 
-  // 1. Bootstrap auth (register + login to capture real token/state)
+  // Build endpoint lookup map for context-aware payload hydration
+  const endpointMap = new Map<string, AgentEndpoint>();
+  for (const ep of knownEndpoints) {
+    endpointMap.set(`${ep.method}:${ep.path}`, ep);
+    endpointMap.set(`${ep.method}:${substituteParams(ep.path)}`, ep);
+  }
+
+  // 1. Bootstrap auth (register + login for user_a and user_b)
   const bootstrapState = await bootstrapAuth(knownEndpoints, targetBaseUrl, scanId);
 
-  // 2. Generate attack plan
-  const vectors = await generateAttackPlan(knownEndpoints, attackProfile, scanId);
-  if (!vectors.length) {
-    await emitEvent(scanId, 'info', 'No attack vectors generated');
+  // 2. Generate attack mappings (LLM: endpoint → vuln class only)
+  const mappings = await generateAttackMappings(knownEndpoints, attackProfile, scanId);
+  if (!mappings.length) {
+    await emitEvent(scanId, 'info', 'No attack mappings generated');
     return { findingsCount: 0, requestsFired: 0 };
   }
 
-  // 3. Execute
+  // 3. Hydrate vectors with static payloads + vuln conditions
+  const vectors = hydrateVectors(mappings, endpointMap);
+  await emitEvent(scanId, 'info', `Hydrated ${vectors.length} vectors · ${mappings.length - vectors.length} unknown vuln classes dropped`);
+
+  if (vectors.length > 0) {
+    const lines = vectors.map((v) => `  ${v.method.padEnd(6)} ${v.test_path}  [${v.vuln_class}]`).join('\n');
+    await emitEvent(scanId, 'info', `Targets:\n${lines}`);
+  }
+
+  // 4. Execute
   let results: AttackResult[] = [];
   try {
     results = await executeScript(vectors, targetBaseUrl, bootstrapState, scanId);
@@ -578,7 +681,7 @@ export async function runAttacker(options: AttackerOptions): Promise<AttackerRes
     await emitEvent(scanId, 'error', `Script execution failed: ${(err as Error).message}`);
   }
 
-  // 4. Record findings
+  // 5. Record findings
   const findingsCount = await recordFindings(results, scanId);
 
   // Update scan counters
